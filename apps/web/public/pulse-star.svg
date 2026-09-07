@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <title>评分</title><defs><clipPath id="a"><circle cx="32" cy="32" r="24"/></clipPath></defs>
+  <circle cx="32" cy="32" r="29" fill="#FFF2D9"/><circle cx="32" cy="32" r="24" fill="#F3AE43"/>
+  <path d="M8 41c10-13 25-17 50-11v28H8Z" fill="#fff" opacity=".18" clip-path="url(#a)"/>
+  <path d="m32 16 5 10 12 2-9 8 2 12-10-6-10 6 2-12-9-8 12-2Z" fill="#fff"/>
+</svg>

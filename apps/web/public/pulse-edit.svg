@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <title>编辑</title><defs><clipPath id="a"><circle cx="32" cy="32" r="24"/></clipPath></defs>
+  <circle cx="32" cy="32" r="29" fill="#E1F5FF"/><circle cx="32" cy="32" r="24" fill="#39AFE8"/>
+  <path d="M8 41c10-13 25-17 50-11v28H8Z" fill="#fff" opacity=".18" clip-path="url(#a)"/>
+  <path d="M20 43l3-10 17-17a4 4 0 0 1 6 6L29 39Z" fill="#fff"/><path d="M21 47h26" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+</svg>

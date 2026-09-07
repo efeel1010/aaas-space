@@ -1,0 +1,29 @@
+{
+  "name": "pulse-space",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --parallel -r dev",
+    "dev:web": "pnpm --filter @pulse-space/web dev",
+    "dev:api": "pnpm --filter @pulse-space/api dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "db:generate": "pnpm --filter @pulse-space/api db:generate",
+    "db:migrate": "pnpm --filter @pulse-space/api db:migrate",
+    "db:seed": "pnpm --filter @pulse-space/api db:seed",
+    "db:up": "docker compose -f infra/postgres/docker-compose.yml up -d",
+    "db:down": "docker compose -f infra/postgres/docker-compose.yml down",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=11.9.0"
+  },
+  "packageManager": "pnpm@11.21.0"
+}

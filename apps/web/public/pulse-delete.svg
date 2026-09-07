@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <title>删除</title><defs><clipPath id="a"><circle cx="32" cy="32" r="24"/></clipPath></defs>
+  <circle cx="32" cy="32" r="29" fill="#FFE7EA"/><circle cx="32" cy="32" r="24" fill="#FF6678"/>
+  <path d="M8 41c10-13 25-17 50-11v28H8Z" fill="#fff" opacity=".18" clip-path="url(#a)"/>
+  <path d="M22 25h20l-2 22H24Z" fill="#fff"/><path d="M19 21h26M27 21v-4h10v4" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/><path d="M29 31v10M35 31v10" stroke="#FF6678" stroke-width="2.6" stroke-linecap="round"/>
+</svg>

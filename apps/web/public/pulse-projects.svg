@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">
+  <title>科研项目</title>
+  <defs><clipPath id="a"><circle cx="32" cy="32" r="24"/></clipPath></defs>
+  <circle cx="32" cy="32" r="29" fill="#EEE9FF"/>
+  <circle cx="32" cy="32" r="24" fill="#7C5CFF"/>
+  <path d="M8 41c10-13 25-17 50-11v28H8Z" fill="#fff" opacity=".18" clip-path="url(#a)"/>
+  <path d="M17 25a5 5 0 0 1 5-5h8l4 4h9a5 5 0 0 1 5 5v14a5 5 0 0 1-5 5H22a5 5 0 0 1-5-5Z" fill="#fff"/>
+  <path d="M24 36h5l2-6 4 12 3-6h4" fill="none" stroke="#7C5CFF" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

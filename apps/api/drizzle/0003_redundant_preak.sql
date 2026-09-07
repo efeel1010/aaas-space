@@ -1,0 +1,1 @@
+ALTER TABLE "documents" ADD COLUMN "is_folder" boolean DEFAULT false NOT NULL;

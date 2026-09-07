@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 176 40" role="img">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#5d40c9"/></linearGradient></defs>
+  <rect x="2" y="4" width="32" height="32" rx="9" fill="url(#g)"/>
+  <path d="M12 26V14h6a4.4 4.4 0 0 1 0 8.8h-3" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="46" y="28" font-family="Georgia, serif" font-size="22" font-weight="600" fill="#1a1a2e">Pulse Space</text>
+</svg>
