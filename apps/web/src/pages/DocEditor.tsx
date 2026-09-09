@@ -67,6 +67,7 @@ import {
   Upload,
   MoreHorizontal,
   Send,
+  Settings2,
 } from 'lucide-react';
 import { parseDocFile, IMPORT_ACCEPT } from '../lib/docimport';
 import { renderMarkdown, splitSlides, extractHeadings } from '../lib/docmd';
@@ -399,6 +400,256 @@ function ShareMenu({ docId }: { docId: string }) {
   );
 }
 
+// ===== 权限弹层（可见范围/基础权限/指定成员，需 manage） =====
+function PermissionMenu({
+  docId,
+  teamId,
+  visibility: initVisibility,
+  basePermission: initBase,
+}: {
+  docId: string;
+  teamId: string | null;
+  visibility: 'private' | 'team' | 'public';
+  basePermission: 'read' | 'edit';
+}) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [visibility, setVisibility] = useState<'private' | 'team' | 'public'>(initVisibility);
+  const [basePerm, setBasePerm] = useState<'read' | 'edit'>(initBase);
+  const [busy, setBusy] = useState(false);
+
+  // 指定成员列表 + 添加成员（搜索系统用户）
+  const access = useQuery({
+    queryKey: ['doc-access', docId],
+    queryFn: () => docApi.access(docId),
+    enabled: open,
+  });
+  const [searchQ, setSearchQ] = useState('');
+  const [found, setFound] = useState<UserHit[]>([]);
+  const [pick, setPick] = useState<UserHit | null>(null);
+  const [newPerm, setNewPerm] = useState<'read' | 'edit' | 'manage'>('read');
+
+  useEffect(() => {
+    if (open) {
+      setVisibility(initVisibility);
+      setBasePerm(initBase);
+    }
+  }, [open, initVisibility, initBase]);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    if (open) document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  const search = async (q: string) => {
+    setSearchQ(q);
+    if (!q.trim()) {
+      setFound([]);
+      return;
+    }
+    try {
+      const users = await authApi.searchUsers(q);
+      setFound((users as UserHit[]).filter((u) => u.id)); // 交给下方选择
+    } catch {
+      setFound([]);
+    }
+  };
+
+  const addMember = async () => {
+    if (!pick || busy) return;
+    setBusy(true);
+    try {
+      await docApi.grantAccess(docId, pick.id, newPerm);
+      toast(`已添加 ${pick.name} 的权限`);
+      setPick(null);
+      setSearchQ('');
+      setFound([]);
+      qc.invalidateQueries({ queryKey: ['doc-access', docId] });
+      qc.invalidateQueries({ queryKey: ['doc', docId] });
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const changeAccess = async (userId: string, permission: 'read' | 'edit' | 'manage') => {
+    try {
+      await docApi.grantAccess(docId, userId, permission);
+      qc.invalidateQueries({ queryKey: ['doc-access', docId] });
+      qc.invalidateQueries({ queryKey: ['doc', docId] });
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    }
+  };
+
+  const removeMember = async (userId: string) => {
+    try {
+      await docApi.revokeAccess(docId, userId);
+      qc.invalidateQueries({ queryKey: ['doc-access', docId] });
+      qc.invalidateQueries({ queryKey: ['doc', docId] });
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    }
+  };
+
+  const applyVisibility = async (v: 'private' | 'team' | 'public') => {
+    setBusy(true);
+    try {
+      await docApi.update(docId, { visibility: v });
+      setVisibility(v);
+      toast(v === 'private' ? '已设为仅本人可见' : v === 'team' ? '已设为团队可见' : '已设为公开');
+      qc.invalidateQueries({ queryKey: ['doc', docId] });
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyBase = async (b: 'read' | 'edit') => {
+    setBusy(true);
+    try {
+      await docApi.update(docId, { base_permission: b });
+      setBasePerm(b);
+      toast(b === 'read' ? '成员默认可阅读' : '成员默认可编辑');
+      qc.invalidateQueries({ queryKey: ['doc', docId] });
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <button className="btn btn-ghost !px-2.5" onClick={() => setOpen((o) => !o)} title="权限">
+        <Settings2 size={15} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 w-80 max-h-[80vh] overflow-y-auto rounded-xl border border-line bg-white p-4 shadow-card">
+          <p className="mb-3 text-13px font-650 text-ink">文档权限</p>
+
+          <p className="mb-1.5 text-11px font-600 text-muted">可见范围</p>
+          <div className="mb-3 space-y-1.5">
+            <label className="flex items-center gap-2 text-12px text-ink">
+              <input type="radio" checked={visibility === 'private'} onChange={() => applyVisibility('private')} /> 仅本人可见
+              {visibility === 'private' ? <span className="text-10px text-violet">自定义</span> : null}
+            </label>
+            <label className="flex items-center gap-2 text-12px text-ink">
+              <input
+                type="radio"
+                checked={visibility === 'team'}
+                disabled={!teamId}
+                onChange={() => applyVisibility('team')}
+                title={teamId ? '' : '个人文档无团队，需先加入团队'}
+              />
+              团队可见{teamId ? '' : '（需团队）'}
+              {visibility === 'team' ? <span className="text-10px text-violet">自定义</span> : null}
+            </label>
+            <label className="flex items-center gap-2 text-12px text-muted opacity-60">
+              <input type="radio" disabled /> 公开（即将上线）
+            </label>
+          </div>
+
+          <p className="mb-1.5 text-11px font-600 text-muted">基础权限（团队成员默认）</p>
+          <select
+            className="form-input mb-3 w-full !py-1.5 text-12px"
+            value={basePerm}
+            onChange={(e) => applyBase(e.target.value as 'read' | 'edit')}
+          >
+            <option value="read">可阅读</option>
+            <option value="edit">可编辑</option>
+          </select>
+
+          <div className="mb-1.5 flex items-center justify-between">
+            <p className="text-11px font-600 text-muted">指定成员</p>
+            <span className="text-10px text-muted">继承与覆盖</span>
+          </div>
+          <div className="mb-3 space-y-1.5">
+            {access.isLoading ? (
+              <div className="py-2 text-center"><Spinner size={14} /></div>
+            ) : (access.data ?? []).length === 0 ? (
+              <p className="py-2 text-center text-11px text-muted">尚未指定成员，默认继承可见范围与基础权限</p>
+            ) : (
+              (access.data ?? []).map((m) => (
+                <div key={m.user_id} className="flex items-center gap-2 text-12px">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-light text-10px font-700 text-violet">
+                    {m.name?.[0] ?? '?'}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate font-600 text-ink">{m.name}</span>
+                  <select
+                    className="form-input !w-auto !py-1 text-11px"
+                    value={m.permission}
+                    onChange={(e) => changeAccess(m.user_id, e.target.value as 'read' | 'edit' | 'manage')}
+                  >
+                    <option value="read">只读</option>
+                    <option value="edit">可编辑</option>
+                    <option value="manage">管理</option>
+                  </select>
+                  <button onClick={() => removeMember(m.user_id)} className="text-muted transition hover:text-coral" title="移除授权">
+                    <X size={13} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* 添加成员 */}
+          <div className="border-t border-line pt-3">
+            <div className="mb-1 flex gap-1.5">
+              <input
+                className="form-input min-w-0 flex-1 !py-1.5 text-12px"
+                placeholder="输入姓名或邮箱添加成员"
+                value={searchQ}
+                onChange={(e) => search(e.target.value)}
+              />
+              <select className="form-input !w-auto !py-1.5 text-11px" value={newPerm} onChange={(e) => setNewPerm(e.target.value as 'read' | 'edit' | 'manage')}>
+                <option value="read">只读</option>
+                <option value="edit">可编辑</option>
+                <option value="manage">管理</option>
+              </select>
+              <button className="btn btn-primary shrink-0 !px-2.5 !py-1.5 text-11px" disabled={!pick || busy} onClick={addMember}>
+                <Plus size={13} /> 添加
+              </button>
+            </div>
+            {searchQ.trim() && found.length > 0 && (
+              <div className="mt-1 overflow-hidden rounded-lg border border-line">
+                {found.map((u) => (
+                  <button
+                    key={u.id}
+                    onClick={() => setPick(u)}
+                    className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-12px hover:bg-violet-light ${pick?.id === u.id ? 'bg-violet-light text-violet' : 'text-ink'}`}
+                  >
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-light text-10px font-700 text-violet">
+                      {u.name?.[0] ?? '?'}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-600">{u.name}</span>
+                    <span className="truncate text-10px text-muted">{u.email}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {pick && (
+              <p className="mt-1.5 rounded bg-violet-light px-2 py-1 text-10px font-600 text-violet">
+                待添加：{pick.name}（{pick.email}）
+              </p>
+            )}
+            <p className="mb-1 mt-2 text-10px text-muted">
+              默认继承父级可见范围与基础权限；手动指定/修改后即为自定义。个人文档可授权任意系统用户，团队文档限团队成员。
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ===== 反向链接弹窗 =====
 function BacklinksModal({ docId, open, onClose }: { docId: string; open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
@@ -590,6 +841,16 @@ export function DocEditor() {
     queryFn: () => docApi.get(id!),
     enabled: !!id,
   });
+
+  // 权限门禁：effective_permission==='read' 时只读，禁编辑/保存/删除/权限弹窗（见工具函数下方）
+  const effPerm = doc.data?.effective_permission;
+  const readOnly = effPerm === 'read';
+  const canManage = effPerm === 'manage';
+
+  // 只读时强制进入预览态，不回退到编辑态
+  useEffect(() => {
+    if (readOnly) setPreview(true);
+  }, [readOnly]);
 
   const ancestors = useQuery({
     queryKey: ['doc-ancestors', id],
@@ -2684,11 +2945,18 @@ export function DocEditor() {
           className="min-w-0 flex-1 border-none bg-transparent font-display text-16px font-700 text-ink outline-none"
           value={title}
           onChange={(e) => onTitle(e.target.value)}
+          readOnly={readOnly}
+          disabled={readOnly}
+          title={readOnly ? '只读权限，不可编辑标题' : undefined}
           placeholder="未命名文档"
         />
-        <span className={`shrink-0 text-11px font-600 ${saving ? 'text-amber' : 'text-muted'}`}>
-          {saving ? '保存中…' : '已自动保存'}
-        </span>
+        {readOnly ? (
+          <span className="shrink-0 text-11px font-600 text-muted">只读 · 内容已自动同步</span>
+        ) : (
+          <span className={`shrink-0 text-11px font-600 ${saving ? 'text-amber' : 'text-muted'}`}>
+            {saving ? '保存中…' : '已自动保存'}
+          </span>
+        )}
 
         <div className="ml-2 flex items-center gap-1 rounded-xl border border-line bg-white p-1">
           <button
@@ -2722,12 +2990,13 @@ export function DocEditor() {
 
         <button
           onClick={togglePreview}
+          disabled={readOnly}
           className={`flex shrink-0 items-center gap-1 rounded-lg border px-3 py-1.5 text-12px font-650 transition ${
-            preview
+            preview || readOnly
               ? 'border-violet-border bg-violet-light text-violet'
               : 'border-line bg-white text-muted hover:border-violet-border hover:text-violet'
           }`}
-          title="预览 / 返回编辑"
+          title={readOnly ? '只读权限，已锁定为只读视图' : '预览 / 返回编辑'}
         >
           {preview ? <Pencil size={13} /> : <Eye size={13} />} {preview ? '返回编辑' : '预览'}
         </button>
@@ -2742,7 +3011,7 @@ export function DocEditor() {
         >
           <Code2 size={13} /> {editStyle === 'md' ? 'Markdown 源码' : '源码'}
         </button>
-
+        {!readOnly && (<>
         <button className="btn btn-ghost !px-2.5" onClick={() => setPageWide((w) => !w)} title="切换页面宽度（宽 / 窄）">
           <LayoutPanelLeft size={15} />
         </button>
@@ -2760,6 +3029,19 @@ export function DocEditor() {
           <GitCompare size={15} />
         </button>
         <ShareMenu docId={id!} />
+        {canManage && (
+          <PermissionMenu
+            docId={id!}
+            teamId={doc.data?.team_id ?? null}
+            visibility={doc.data?.visibility ?? 'private'}
+            basePermission={doc.data?.base_permission ?? 'edit'}
+          />
+        )}
+        {readOnly && (
+          <span className="shrink-0 rounded-md bg-amber/10 px-2 py-1 text-11px font-700 text-amber" title="你拥有只读权限，无法编辑">
+            只读
+          </span>
+        )}
         <div className="group relative">
           <button className="btn btn-ghost !px-2.5" title="导出">
             <FileDown size={15} />
@@ -2819,9 +3101,11 @@ export function DocEditor() {
             </button>
           </div>
         </div>
+        </>)}
       </div>
 
-      {/* 富文本格式工具栏 */}
+      {/* 富文本格式工具栏（只读时不渲染） */}
+      {!readOnly && (
       <div ref={toolBarRef} className="flex items-center gap-0.5 overflow-x-auto border-b border-line bg-white/90 px-5 py-1.5">
         <button
           onClick={() => openAiChat(getSelectedText())}
@@ -2885,6 +3169,7 @@ export function DocEditor() {
           <Languages size={14} /> 翻译选中
         </button>
       </div>
+      )}
 
       {/* 主编辑区 + 右侧面板 */}
       <div className="flex min-h-0 flex-1 bg-white">

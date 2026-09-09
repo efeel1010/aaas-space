@@ -9,9 +9,11 @@ import {
   documentComments,
   documentFavorites,
   documentShares,
+  documentAccess,
   docTemplates,
   notifications,
   users,
+  teamMembers,
 } from '../db/schema';
 import { requireAuth, isTeamMember } from '../middleware/session';
 import {
@@ -19,7 +21,10 @@ import {
   UpdateDocRequest,
   CreateVersionRequest,
   CreateCommentRequest,
+  SetDocAccessRequest,
 } from '@pulse-space/contracts';
+import type { EffectivePermission } from '@pulse-space/contracts';
+import { loadDocAccessCtx, filterAccessible, resolveDocAccess } from '../lib/docAccess';
 import type { AppVariables } from '../types';
 
 export const documentsRouter = new Hono<{ Variables: AppVariables }>();
@@ -36,7 +41,12 @@ const kindFilter = (raw: string | undefined): SQL[] => {
   return kinds.length > 1 ? [inArray(documents.kind, kinds)] : [eq(documents.kind, kinds[0] ?? 'doc')];
 };
 
-const toDto = (d: typeof documents.$inferSelect, ownerName: string | null = null, isFavorite = false) => ({
+const toDto = (
+  d: typeof documents.$inferSelect,
+  ownerName: string | null = null,
+  isFavorite = false,
+  effective: EffectivePermission | null = null,
+) => ({
   id: d.id,
   team_id: d.team_id,
   owner_id: d.owner_id,
@@ -50,23 +60,24 @@ const toDto = (d: typeof documents.$inferSelect, ownerName: string | null = null
   cover: d.cover,
   last_viewed_at: d.last_viewed_at ? d.last_viewed_at.toISOString() : null,
   is_favorite: isFavorite,
+  visibility: d.visibility,
+  base_permission: d.base_permission,
+  effective_permission: effective,
   created_at: d.created_at.toISOString(),
   updated_at: d.updated_at.toISOString(),
 });
 
-// 校验文档存在 + 访问权限，返回文档 or 错误响应
+// 校验文档存在（含未删除）+ 解析生效权限；none 统一 403
 async function findDoc(c: Context<{ Variables: AppVariables }>, id: string) {
   const [doc] = await db.select().from(documents).where(eq(documents.id, id)).limit(1);
   if (!doc || doc.deleted_at) return { error: c.json({ code: 404, message: '文档不存在', timestamp: new Date().toISOString() }, 404) };
   const user = c.get('user');
-  if (doc.team_id) {
-    if (!(await isTeamMember(user.id, doc.team_id))) {
-      return { error: c.json({ code: 403, message: '无权访问', timestamp: new Date().toISOString() }, 403) };
-    }
-  } else if (doc.owner_id !== user.id) {
+  const ctx = await loadDocAccessCtx(user.id, [doc.id], doc.team_id ? [doc.team_id] : []);
+  const effective = await resolveDocAccess(user.id, doc, ctx);
+  if (effective === 'none') {
     return { error: c.json({ code: 403, message: '无权访问', timestamp: new Date().toISOString() }, 403) };
   }
-  return { doc };
+  return { doc, effective };
 }
 
 // 列表：scope=personal|team&teamId=&kind=doc|wiki|sheet（支持逗号分隔，如 doc,sheet）&parent=<parentId>
@@ -100,7 +111,13 @@ documentsRouter.get('/', async (c) => {
       .orderBy(desc(documents.is_folder), desc(documents.updated_at));
   }
 
-  return c.json({ code: 0, message: 'ok', data: rows.map((d) => toDto(d)), timestamp: new Date().toISOString() });
+  const accessible = await filterAccessible(user.id, rows);
+  return c.json({
+    code: 0,
+    message: 'ok',
+    data: accessible.map(({ doc, effective }) => toDto(doc, null, false, effective)),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // 知识库目录（全量平铺，供概览 / 搜索 / 移动目标选择）
@@ -109,28 +126,36 @@ documentsRouter.get('/wiki-toc', async (c) => {
   const scope = c.req.query('scope') ?? 'personal';
   const teamId = c.req.query('teamId');
 
-  let rows: { id: string; title: string; parent_id: string | null; updated_at: Date }[];
+  let rows: (typeof documents.$inferSelect)[];
   if (scope === 'team' && teamId) {
     if (!(await isTeamMember(user.id, teamId))) {
       return c.json({ code: 403, message: '无权访问该团队文档', timestamp: new Date().toISOString() }, 403);
     }
     rows = await db
-      .select({ id: documents.id, title: documents.title, parent_id: documents.parent_id, updated_at: documents.updated_at })
+      .select()
       .from(documents)
       .where(and(eq(documents.team_id, teamId), eq(documents.kind, 'wiki'), isNull(documents.deleted_at)))
       .orderBy(desc(documents.updated_at));
   } else {
     rows = await db
-      .select({ id: documents.id, title: documents.title, parent_id: documents.parent_id, updated_at: documents.updated_at })
+      .select()
       .from(documents)
       .where(and(eq(documents.owner_id, user.id), isNull(documents.team_id), eq(documents.kind, 'wiki'), isNull(documents.deleted_at)))
       .orderBy(desc(documents.updated_at));
   }
 
+  const accessible = await filterAccessible(user.id, rows);
   return c.json({
     code: 0,
     message: 'ok',
-    data: rows.map((r) => ({ id: r.id, title: r.title, parent_id: r.parent_id, updated_at: r.updated_at.toISOString() })),
+    data: accessible.map(({ doc, effective }) => ({
+      id: doc.id,
+      title: doc.title,
+      parent_id: doc.parent_id,
+      updated_at: doc.updated_at.toISOString(),
+      visibility: doc.visibility,
+      effective_permission: effective,
+    })),
     timestamp: new Date().toISOString(),
   });
 });
@@ -307,6 +332,96 @@ documentsRouter.delete('/:id/share', async (c) => {
   return c.json({ code: 0, message: '已关闭分享', timestamp: new Date().toISOString() });
 });
 
+// ===== 逐成员授权管理（需 manage） =====
+
+// 授权成员列表（join users + teamMembers 取团队角色）
+documentsRouter.get('/:id/access', async (c) => {
+  const user = c.get('user');
+  const { doc, error, effective } = await findDoc(c, c.req.param('id'));
+  if (error) return error;
+  if (effective !== 'manage') {
+    return c.json({ code: 403, message: '需要管理权限', timestamp: new Date().toISOString() }, 403);
+  }
+  const rows = await db
+    .select({
+      user_id: documentAccess.user_id,
+      name: users.name,
+      email: users.email,
+      avatar_url: users.avatar_url,
+      permission: documentAccess.permission,
+      role: teamMembers.role,
+    })
+    .from(documentAccess)
+    .innerJoin(users, eq(documentAccess.user_id, users.id))
+    .leftJoin(teamMembers, and(eq(teamMembers.user_id, users.id), doc!.team_id ? eq(teamMembers.team_id, doc!.team_id) : sql`false`))
+    .where(eq(documentAccess.doc_id, doc!.id))
+    .orderBy(desc(documentAccess.created_at));
+  return c.json({
+    code: 0,
+    message: 'ok',
+    data: rows.map((r) => ({
+      user_id: r.user_id,
+      name: r.name,
+      email: r.email,
+      avatar_url: r.avatar_url,
+      permission: r.permission,
+      team_role: r.role,
+    })),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// upsert 单成员授权
+documentsRouter.put('/:id/access', zValidator('json', SetDocAccessRequest), async (c) => {
+  const user = c.get('user');
+  const { doc, error, effective } = await findDoc(c, c.req.param('id'));
+  if (error) return error;
+  if (effective !== 'manage') {
+    return c.json({ code: 403, message: '需要管理权限', timestamp: new Date().toISOString() }, 403);
+  }
+  const body = c.req.valid('json');
+  const targetUser = body.user_id;
+  if (targetUser === doc!.owner_id) {
+    return c.json({ code: 400, message: '所有者无需授权', timestamp: new Date().toISOString() }, 400);
+  }
+  const [u] = await db.select({ id: users.id }).from(users).where(eq(users.id, targetUser)).limit(1);
+  if (!u) return c.json({ code: 404, message: '目标用户不存在', timestamp: new Date().toISOString() }, 404);
+
+  // 团队文档限团队内成员；个人文档可授权任意系统用户
+  if (doc!.team_id) {
+    const [tm] = await db
+      .select({ user_id: teamMembers.user_id })
+      .from(teamMembers)
+      .where(and(eq(teamMembers.team_id, doc!.team_id), eq(teamMembers.user_id, targetUser)))
+      .limit(1);
+    if (!tm) {
+      return c.json({ code: 403, message: '团队文档仅可授权本团队成员', timestamp: new Date().toISOString() }, 403);
+    }
+  }
+
+  await db
+    .insert(documentAccess)
+    .values({ doc_id: doc!.id, user_id: targetUser, permission: body.permission, granted_by: user.id })
+    .onConflictDoUpdate({
+      target: [documentAccess.doc_id, documentAccess.user_id],
+      set: { permission: body.permission, updated_at: new Date() },
+    });
+  return c.json({ code: 0, message: '已设置权限', timestamp: new Date().toISOString() });
+});
+
+// 移除授权
+documentsRouter.delete('/:id/access/:userId', async (c) => {
+  const { doc, error, effective } = await findDoc(c, c.req.param('id'));
+  if (error) return error;
+  if (effective !== 'manage') {
+    return c.json({ code: 403, message: '需要管理权限', timestamp: new Date().toISOString() }, 403);
+  }
+  await db
+    .delete(documentAccess)
+    .where(and(eq(documentAccess.doc_id, doc!.id), eq(documentAccess.user_id, c.req.param('userId'))));
+  return c.json({ code: 0, message: '已移除授权', timestamp: new Date().toISOString() });
+});
+
 // 反向链接：哪些文档通过 [[本文档标题]] 引用了本文档
 documentsRouter.get('/:id/backlinks', async (c) => {
   const { doc, error } = await findDoc(c, c.req.param('id'));
@@ -337,7 +452,7 @@ documentsRouter.get('/:id/backlinks', async (c) => {
 
 // 详情
 documentsRouter.get('/:id', async (c) => {
-  const { doc, error } = await findDoc(c, c.req.param('id'));
+  const { doc, error, effective } = await findDoc(c, c.req.param('id'));
   if (error) return error;
   const d = doc!;
   // 记录访问时间（用于首页「最近访问」排序）
@@ -355,7 +470,7 @@ documentsRouter.get('/:id', async (c) => {
   return c.json({
     code: 0,
     message: 'ok',
-    data: toDto(d, owner?.name ?? null, !!fav),
+    data: toDto(d, owner?.name ?? null, !!fav, effective!),
     timestamp: new Date().toISOString(),
   });
 });
@@ -409,6 +524,21 @@ documentsRouter.post('/', zValidator('json', CreateDocRequest), async (c) => {
 
   const isFolder = body.is_folder ?? false;
 
+  // 子级继承：优先 body 显式值，其次父级，最后按 scope 默认（team→team，personal→private）
+  let visibility = body.visibility;
+  let basePermission = body.base_permission;
+  if (body.parent_id) {
+    const [parent] = await db
+      .select({ visibility: documents.visibility, base_permission: documents.base_permission })
+      .from(documents)
+      .where(eq(documents.id, body.parent_id))
+      .limit(1);
+    if (visibility === undefined && parent) visibility = parent.visibility;
+    if (basePermission === undefined && parent) basePermission = parent.base_permission;
+  }
+  if (visibility === undefined) visibility = body.scope === 'team' ? 'team' : 'private';
+  if (basePermission === undefined) basePermission = 'edit';
+
   const [doc] = await db
     .insert(documents)
     .values({
@@ -421,6 +551,8 @@ documentsRouter.post('/', zValidator('json', CreateDocRequest), async (c) => {
       content: isFolder ? '' : (body.content ?? ''),
       icon: body.icon ?? null,
       cover: body.cover ?? null,
+      visibility,
+      base_permission: basePermission,
     })
     .returning();
 
@@ -431,8 +563,21 @@ documentsRouter.post('/', zValidator('json', CreateDocRequest), async (c) => {
 documentsRouter.patch('/:id', zValidator('json', UpdateDocRequest), async (c) => {
   const user = c.get('user');
   const body = c.req.valid('json');
-  const { doc, error } = await findDoc(c, c.req.param('id'));
+  const { doc, error, effective } = await findDoc(c, c.req.param('id'));
   if (error) return error;
+
+  // 变更可见范围 / 基础权限需 manage 权限
+  if (body.visibility !== undefined || body.base_permission !== undefined) {
+    if (effective !== 'manage') {
+      return c.json({ code: 403, message: '需要管理权限', timestamp: new Date().toISOString() }, 403);
+    }
+  }
+
+  // 内容/标题/结构等编辑操作需至少 edit 权限
+  const editFields = ['title', 'content', 'parent_id', 'is_folder', 'icon', 'cover'];
+  if (editFields.some((f) => f in body) && effective === 'read') {
+    return c.json({ code: 403, message: '需要编辑权限', timestamp: new Date().toISOString() }, 403);
+  }
 
   const patch: Record<string, unknown> = { ...body, updated_at: new Date() };
   const [updated] = await db.update(documents).set(patch).where(eq(documents.id, doc!.id)).returning();
@@ -466,12 +611,10 @@ documentsRouter.delete('/:id', async (c) => {
   const [doc] = await db.select().from(documents).where(eq(documents.id, c.req.param('id'))).limit(1);
   if (!doc || doc.deleted_at) return c.json({ code: 404, message: '文档不存在', timestamp: new Date().toISOString() }, 404);
 
-  if (doc.team_id) {
-    if (!(await isTeamMember(user.id, doc.team_id))) {
-      return c.json({ code: 403, message: '无权删除', timestamp: new Date().toISOString() }, 403);
-    }
-  } else if (doc.owner_id !== user.id) {
-    return c.json({ code: 403, message: '无权删除', timestamp: new Date().toISOString() }, 403);
+  const ctx = await loadDocAccessCtx(user.id, [doc.id], doc.team_id ? [doc.team_id] : []);
+  const effective = await resolveDocAccess(user.id, doc, ctx);
+  if (effective !== 'manage') {
+    return c.json({ code: 403, message: '需要管理权限', timestamp: new Date().toISOString() }, 403);
   }
 
   // 级联标记子文档（知识库树 / 文件夹递归子树）
@@ -493,7 +636,12 @@ documentsRouter.post('/:id/restore', async (c) => {
   const user = c.get('user');
   const [doc] = await db.select().from(documents).where(eq(documents.id, c.req.param('id'))).limit(1);
   if (!doc || !doc.deleted_at) return c.json({ code: 404, message: '文档不存在或不在回收站', timestamp: new Date().toISOString() }, 404);
-  if (doc.owner_id !== user.id) return c.json({ code: 403, message: '无权恢复', timestamp: new Date().toISOString() }, 403);
+
+  const ctx = await loadDocAccessCtx(user.id, [doc.id], doc.team_id ? [doc.team_id] : []);
+  const effective = await resolveDocAccess(user.id, doc, ctx);
+  if (effective !== 'manage') {
+    return c.json({ code: 403, message: '需要管理权限', timestamp: new Date().toISOString() }, 403);
+  }
 
   // 恢复整个子树
   const ids: string[] = [doc.id];
@@ -522,7 +670,12 @@ documentsRouter.delete('/:id/permanent', async (c) => {
   const user = c.get('user');
   const [doc] = await db.select().from(documents).where(eq(documents.id, c.req.param('id'))).limit(1);
   if (!doc || !doc.deleted_at) return c.json({ code: 404, message: '文档不存在或不在回收站', timestamp: new Date().toISOString() }, 404);
-  if (doc.owner_id !== user.id) return c.json({ code: 403, message: '无权删除', timestamp: new Date().toISOString() }, 403);
+
+  const ctx = await loadDocAccessCtx(user.id, [doc.id], doc.team_id ? [doc.team_id] : []);
+  const effective = await resolveDocAccess(user.id, doc, ctx);
+  if (effective !== 'manage') {
+    return c.json({ code: 403, message: '需要管理权限', timestamp: new Date().toISOString() }, 403);
+  }
   await db.delete(documents).where(eq(documents.id, doc.id));
   return c.json({ code: 0, message: '已彻底删除', timestamp: new Date().toISOString() });
 });

@@ -6,7 +6,8 @@ import { UserPicker, type PickedUser } from '../components/UserPicker';
 import { CommentThread } from '../components/CommentThread';
 import { fromLocalInput, toLocalInput, rangeSummary } from '../lib/datetime';
 import { ArrowLeft, Plus, Sparkles, Trash2, ChevronDown, ChevronRight, ListTodo, Wand2, Check, Pencil, Users, ListTree, ChartGantt, Flag, CheckCircle2, Circle } from 'lucide-react';
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
+import type { ReactNode } from 'react';
 import type { Requirement, Task, Collaborator, Milestone } from '@pulse-space/contracts';
 
 const TASK_COLUMNS = [
@@ -16,6 +17,49 @@ const TASK_COLUMNS = [
   { key: 'done', label: '已完成', color: 'text-green', bg: 'bg-green/10', ring: 'ring-green/50' },
 ];
 
+type TabKey = 'milestone' | 'requirement' | 'task';
+
+// ===== 飞书多维表格风格：紧凑表格基础样式 =====
+const TH = 'px-2 py-1.5 text-left text-10px font-650 text-muted whitespace-nowrap';
+const CELL = 'px-2 py-1.5 align-middle';
+const ROW = 'border-b border-line transition-colors hover:bg-surface/60';
+const TABLE = 'w-full border-collapse text-12px';
+
+// 紧凑输入框
+const compactInput =
+  'h-7 rounded-md border border-line bg-white px-2 text-12px text-ink placeholder:text-muted focus:border-violet focus:outline-none';
+const compactSelect =
+  'h-7 rounded-md border border-line bg-white px-2 text-12px text-ink focus:border-violet focus:outline-none';
+// 紧凑操作小按钮
+const opBtn = 'rounded p-1 text-muted transition hover:bg-violet-light hover:text-violet';
+const opBtnDanger = 'rounded p-1 text-muted transition hover:bg-coral-light hover:text-coral';
+
+// 时间范围重叠过滤：item 的 [start,end] 与 [from,to] 是否有交集；无任何时间设值的项在启用范围时被排除
+function inTimeRange(
+  startIso: string | null | undefined,
+  endIso: string | null | undefined,
+  from: string,
+  to: string,
+): boolean {
+  const start = startIso ? new Date(startIso).getTime() : null;
+  const end = endIso ? new Date(endIso).getTime() : null;
+  const f = from ? new Date(from).getTime() : null;
+  const t = to ? new Date(to).getTime() : null;
+  if (f === null && t === null) return true;
+  if (start === null && end === null) return false;
+  const lo = start ?? end ?? Number.NEGATIVE_INFINITY;
+  const hi = end ?? start ?? Number.POSITIVE_INFINITY;
+  if (f !== null && hi < f) return false;
+  if (t !== null && lo > t) return false;
+  return true;
+}
+
+function nameMatch(text: string | null | undefined, kw: string): boolean {
+  const k = kw.trim().toLowerCase();
+  if (!k) return true;
+  return (text ?? '').toLowerCase().includes(k);
+}
+
 type ReqForm = {
   id: string | null;
   title: string;
@@ -23,6 +67,7 @@ type ReqForm = {
   priority: string;
   status: string;
   owner: PickedUser[];
+  milestoneId: string;
   planStart: string;
   planEnd: string;
   actualStart: string;
@@ -38,6 +83,7 @@ type TaskForm = {
   priority: string;
   status: string;
   assignee: PickedUser[];
+  milestoneId: string;
   dueDate: string;
   planStart: string;
   planEnd: string;
@@ -48,11 +94,11 @@ type TaskForm = {
 
 const emptyReq: ReqForm = {
   id: null, title: '', description: '', priority: 'medium', status: 'open',
-  owner: [], planStart: '', planEnd: '', actualStart: '', actualEnd: '', collaborators: [],
+  owner: [], milestoneId: '', planStart: '', planEnd: '', actualStart: '', actualEnd: '', collaborators: [],
 };
 const emptyTask: TaskForm = {
   id: null, requirementId: '', title: '', description: '', priority: 'medium', status: 'todo',
-  assignee: [], dueDate: '', planStart: '', planEnd: '', actualStart: '', actualEnd: '', collaborators: [],
+  assignee: [], milestoneId: '', dueDate: '', planStart: '', planEnd: '', actualStart: '', actualEnd: '', collaborators: [],
 };
 
 function ownerToPicked(id: string | null, name: string | null): PickedUser[] {
@@ -190,12 +236,71 @@ function GanttView({ requirements, tasksByReq }: { requirements: Requirement[]; 
   );
 }
 
+// ===== 通用筛选条 =====
+type SortOption = { value: string; label: string };
+function FilterBar({
+  nameLabel,
+  name,
+  timeLabel,
+  from,
+  to,
+  sort,
+  sortOptions,
+  onName,
+  onFrom,
+  onTo,
+  onSort,
+}: {
+  nameLabel: string;
+  name: string;
+  timeLabel: string;
+  from: string;
+  to: string;
+  sort?: string;
+  sortOptions?: SortOption[];
+  onName: (v: string) => void;
+  onFrom: (v: string) => void;
+  onTo: (v: string) => void;
+  onSort?: (v: string) => void;
+}) {
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-white px-2 py-1.5">
+      <input
+        className={`${compactInput} w-48`}
+        value={name}
+        onChange={(e) => onName(e.target.value)}
+        placeholder={`按${nameLabel}筛选`}
+      />
+      <div className="flex items-center gap-1">
+        <span className="text-10px text-muted">{timeLabel}起</span>
+        <input type="datetime-local" className={`${compactInput} w-38`} value={from} onChange={(e) => onFrom(e.target.value)} />
+      </div>
+      <div className="flex items-center gap-1">
+        <span className="text-10px text-muted">止</span>
+        <input type="datetime-local" className={`${compactInput} w-38`} value={to} onChange={(e) => onTo(e.target.value)} />
+      </div>
+      {sortOptions && sort !== undefined && onSort && (
+        <select
+          className={`${compactSelect} w-32`}
+          value={sort}
+          onChange={(e) => onSort(e.target.value)}
+        >
+          {sortOptions.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
 export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const toast = useToast();
   const qc = useQueryClient();
 
+  const [tab, setTab] = useState<TabKey>('requirement');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [reqModalOpen, setReqModalOpen] = useState(false);
   const [reqForm, setReqForm] = useState<ReqForm>(emptyReq);
@@ -204,13 +309,21 @@ export function ProjectDetail() {
   // 看板拖拽
   const [draggingTask, setDraggingTask] = useState<Task | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
-  // 视图切换：需求列表 / 时间线
+  // 需求 Tab 内：列表 / 时间线子视图
   const [viewMode, setViewMode] = useState<'list' | 'timeline'>('list');
-  // 里程碑
+  // 里程碑：新建 + 编辑
   const [milestoneOpen, setMilestoneOpen] = useState(false);
   const [milestoneTitle, setMilestoneTitle] = useState('');
   const [milestoneDesc, setMilestoneDesc] = useState('');
   const [milestoneDue, setMilestoneDue] = useState('');
+  const [milestoneEdit, setMilestoneEdit] = useState<
+    { open: boolean; id: string | null; title: string; desc: string; due: string }
+  >({ open: false, id: null, title: '', desc: '', due: '' });
+
+  // 筛选状态（三个 Tab 各自独立）
+  const [msFilter, setMsFilter] = useState({ name: '', from: '', to: '' });
+  const [reqFilter, setReqFilter] = useState({ name: '', from: '', to: '', sort: 'priority' });
+  const [taskFilter, setTaskFilter] = useState({ name: '', from: '', to: '', sort: 'updated' });
 
   // AI 生成需求（项目级别）
   const [openAi, setOpenAi] = useState(false);
@@ -232,6 +345,9 @@ export function ProjectDetail() {
   const project = useQuery({ queryKey: ['project', id], queryFn: () => projectApi.get(id!) });
   const reqs = useQuery({ queryKey: ['reqs', id], queryFn: () => projectApi.requirements(id!) });
   const milestones = useQuery({ queryKey: ['milestones', id], queryFn: () => projectApi.milestones(id!) });
+  // 任务 Tab：项目级任务列表（含 requirement_title / milestone_name）
+  const projectTasks = useQuery({ queryKey: ['project-tasks', id], queryFn: () => projectApi.projectTasks(id!), enabled: !!id });
+  // 需求 Tab 内嵌看板 / 时间线使用
   const tasksByReq = useQuery({
     queryKey: ['tasks-all', id],
     queryFn: async () => {
@@ -247,6 +363,7 @@ export function ProjectDetail() {
     qc.invalidateQueries({ queryKey: ['tasks-all'] });
     qc.invalidateQueries({ queryKey: ['project'] });
     qc.invalidateQueries({ queryKey: ['milestones'] });
+    qc.invalidateQueries({ queryKey: ['project-tasks'] });
   };
 
   const createMilestone = useMutation({
@@ -262,6 +379,23 @@ export function ProjectDetail() {
       setMilestoneTitle('');
       setMilestoneDesc('');
       setMilestoneDue('');
+      invalidateAll();
+    },
+    onError: (e) => toast((e as Error).message, 'error'),
+  });
+
+  const updateMilestone = useMutation({
+    mutationFn: () =>
+      milestoneEdit.id
+        ? projectApi.updateMilestone(milestoneEdit.id, {
+            title: milestoneEdit.title,
+            description: milestoneEdit.desc || undefined,
+            due_date: milestoneEdit.due ? new Date(milestoneEdit.due).toISOString() : null,
+          })
+        : Promise.reject(new Error('缺少里程碑 ID')),
+    onSuccess: () => {
+      toast('里程碑已更新');
+      setMilestoneEdit({ open: false, id: null, title: '', desc: '', due: '' });
       invalidateAll();
     },
     onError: (e) => toast((e as Error).message, 'error'),
@@ -297,6 +431,7 @@ export function ProjectDetail() {
       priority: r.priority,
       status: r.status,
       owner: ownerToPicked(r.owner_id, r.owner_name),
+      milestoneId: r.milestone_id ?? '',
       planStart: dateInputFor(r.plan_start_at),
       planEnd: dateInputFor(r.plan_end_at),
       actualStart: dateInputFor(r.actual_start_at),
@@ -318,6 +453,7 @@ export function ProjectDetail() {
       priority: t.priority,
       status: t.status,
       assignee: t.assignee_id ? [{ id: t.assignee_id, name: t.assignee_name ?? '', email: '', avatar_url: null }] : [],
+      milestoneId: t.milestone_id ?? '',
       dueDate: dateInputFor(t.due_date),
       planStart: dateInputFor(t.plan_start_at),
       planEnd: dateInputFor(t.plan_end_at),
@@ -327,6 +463,15 @@ export function ProjectDetail() {
     });
     setTaskModalOpen(true);
   };
+  const openEditMilestone = (m: Milestone) => {
+    setMilestoneEdit({
+      open: true,
+      id: m.id,
+      title: m.title,
+      desc: m.description,
+      due: dateInputFor(m.due_date),
+    });
+  };
 
   const createReq = useMutation({
     mutationFn: () =>
@@ -335,6 +480,7 @@ export function ProjectDetail() {
         description: reqForm.description,
         priority: reqForm.priority,
         owner_id: reqForm.owner[0]?.id ?? null,
+        milestone_id: reqForm.milestoneId || null,
         plan_start_at: fromLocalInput(reqForm.planStart),
         plan_end_at: fromLocalInput(reqForm.planEnd),
         actual_start_at: fromLocalInput(reqForm.actualStart),
@@ -357,6 +503,7 @@ export function ProjectDetail() {
         priority: reqForm.priority,
         status: reqForm.status,
         owner_id: reqForm.owner[0]?.id ?? null,
+        milestone_id: reqForm.milestoneId || null,
         plan_start_at: fromLocalInput(reqForm.planStart),
         plan_end_at: fromLocalInput(reqForm.planEnd),
         actual_start_at: fromLocalInput(reqForm.actualStart),
@@ -378,6 +525,7 @@ export function ProjectDetail() {
         description: taskForm.description,
         priority: taskForm.priority,
         assignee_id: taskForm.assignee[0]?.id,
+        milestone_id: taskForm.milestoneId || null,
         due_date: fromLocalInput(taskForm.dueDate) ?? undefined,
         plan_start_at: fromLocalInput(taskForm.planStart),
         plan_end_at: fromLocalInput(taskForm.planEnd),
@@ -401,6 +549,7 @@ export function ProjectDetail() {
         priority: taskForm.priority,
         status: taskForm.status,
         assignee_id: taskForm.assignee[0]?.id ?? null,
+        milestone_id: taskForm.milestoneId || null,
         due_date: fromLocalInput(taskForm.dueDate),
         plan_start_at: fromLocalInput(taskForm.planStart),
         plan_end_at: fromLocalInput(taskForm.planEnd),
@@ -426,6 +575,15 @@ export function ProjectDetail() {
     mutationFn: (tid: string) => projectApi.removeTask(tid),
     onSuccess: () => {
       toast('任务已删除');
+      invalidateAll();
+    },
+    onError: (e) => toast((e as Error).message, 'error'),
+  });
+
+  const delReq = useMutation({
+    mutationFn: (rid: string) => projectApi.removeRequirement(rid),
+    onSuccess: () => {
+      toast('需求已删除');
       invalidateAll();
     },
     onError: (e) => toast((e as Error).message, 'error'),
@@ -547,9 +705,47 @@ export function ProjectDetail() {
     });
   };
 
+  // ===== 三个 Tab 的筛选 + 排序结果 =====
+  const filteredMilestones = (milestones.data ?? [])
+    .filter(
+      (m) =>
+        nameMatch(m.title, msFilter.name) &&
+        inTimeRange(m.due_date, m.due_date, msFilter.from, msFilter.to),
+    )
+    .sort((a, b) => (a.due_date ?? '').localeCompare(b.due_date ?? '') || a.created_at.localeCompare(b.created_at));
+
+  const filteredReqs = (reqs.data ?? [])
+    .filter(
+      (r) =>
+        nameMatch(r.title, reqFilter.name) &&
+        inTimeRange(r.plan_start_at, r.plan_end_at, reqFilter.from, reqFilter.to),
+    )
+    .sort((a, b) => {
+      if (reqFilter.sort === 'plan') return (a.plan_start_at ?? '').localeCompare(b.plan_start_at ?? '');
+      if (reqFilter.sort === 'updated') return b.updated_at.localeCompare(a.updated_at);
+      return priorityOrder[a.priority] - priorityOrder[b.priority];
+    });
+
+  const filteredTasks = (projectTasks.data ?? [])
+    .filter(
+      (t) =>
+        nameMatch(t.title, taskFilter.name) &&
+        inTimeRange(t.due_date, t.due_date, taskFilter.from, taskFilter.to),
+    )
+    .sort((a, b) => {
+      if (taskFilter.sort === 'due') return (a.due_date ?? '').localeCompare(b.due_date ?? '');
+      return b.updated_at.localeCompare(a.updated_at);
+    });
+
   if (project.isLoading) return <div className="flex h-full items-center justify-center"><Spinner size={24} /></div>;
   if (project.isError) return <Empty icon="/pulse-projects.svg" title="项目不存在或无权访问" />;
   const p = project.data!;
+
+  const TAB_ITEMS: { key: TabKey; label: string; icon: ReactNode }[] = [
+    { key: 'milestone', label: '里程碑', icon: <Flag size={13} /> },
+    { key: 'requirement', label: '需求', icon: <ListTree size={13} /> },
+    { key: 'task', label: '任务', icon: <ListTodo size={13} /> },
+  ];
 
   return (
     <div className="mx-auto max-w-1200 px-8 py-8">
@@ -592,247 +788,459 @@ export function ProjectDetail() {
         </div>
       </div>
 
-      {/* 里程碑 */}
-      <div className="mb-6 card p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Flag size={15} className="text-violet" />
-            <h2 className="text-14px font-650 text-ink">里程碑</h2>
-            {(milestones.data ?? []).length > 0 && (
+      {/* 三 Tab 切换 */}
+      <div className="mb-5 flex items-center gap-1 border-b border-line">
+        {TAB_ITEMS.map((it) => (
+          <button
+            key={it.key}
+            onClick={() => setTab(it.key)}
+            className={cn(
+              'flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-13px font-650 transition',
+              tab === it.key
+                ? 'border-violet text-violet'
+                : 'border-transparent text-muted hover:text-ink',
+            )}
+          >
+            {it.icon} {it.label}
+            {it.key === 'milestone' && <span className="text-11px text-muted">{(milestones.data ?? []).length}</span>}
+            {it.key === 'requirement' && <span className="text-11px text-muted">{(reqs.data ?? []).length}</span>}
+            {it.key === 'task' && <span className="text-11px text-muted">{(projectTasks.data ?? []).length}</span>}
+          </button>
+        ))}
+      </div>
+
+      {/* ===== 里程碑 Tab ===== */}
+      {tab === 'milestone' && (
+        <div className="mb-6">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
               <span className="text-11px text-muted">
                 {(milestones.data ?? []).filter((m) => m.completed_at).length}/{(milestones.data ?? []).length} 已完成
               </span>
-            )}
+            </div>
+            <button className="btn btn-soft" onClick={() => setMilestoneOpen(true)}>
+              <Plus size={13} /> 添加里程碑
+            </button>
           </div>
-          <button className="btn btn-soft" onClick={() => setMilestoneOpen(true)}>
-            <Plus size={13} /> 添加里程碑
-          </button>
-        </div>
-        {milestones.isLoading ? (
-          <div className="py-4 text-center"><Spinner size={16} /></div>
-        ) : (milestones.data ?? []).length === 0 ? (
-          <p className="text-12px text-muted">暂无里程碑，设置关键节点以跟踪项目进展</p>
-        ) : (
-          <div className="grid gap-2 sm:grid-cols-2">
-            {(milestones.data ?? []).map((m: Milestone) => {
-              const done = !!m.completed_at;
-              const overdue = !done && m.due_date && new Date(m.due_date).getTime() < Date.now();
-              return (
-                <div
-                  key={m.id}
-                  className={cn(
-                    'group flex items-start gap-2.5 rounded-xl border p-3 transition',
-                    done ? 'border-green/30 bg-green/5' : overdue ? 'border-coral/30 bg-coral/5' : 'border-line',
-                  )}
-                >
-                  <button
-                    onClick={() => toggleMilestone.mutate(m.id)}
-                    className={cn('mt-0.5 shrink-0 transition', done ? 'text-green' : 'text-muted hover:text-green')}
-                    title={done ? '取消完成' : '标记完成'}
-                  >
-                    {done ? <CheckCircle2 size={16} /> : <Circle size={16} />}
-                  </button>
-                  <div className="min-w-0 flex-1">
-                    <p className={cn('text-13px font-650', done ? 'text-muted line-through' : 'text-ink')}>{m.title}</p>
-                    {m.description && <p className="mt-0.5 line-clamp-2 text-11px text-muted">{m.description}</p>}
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-10px">
-                      {m.due_date && (
-                        <span className={cn(overdue ? 'text-coral font-650' : 'text-muted')}>
-                          截止 {new Date(m.due_date).toLocaleDateString()}{overdue && '（已逾期）'}
-                        </span>
-                      )}
-                      {done && m.completed_at && (
-                        <span className="text-green">完成于 {new Date(m.completed_at).toLocaleDateString()}</span>
-                      )}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => removeMilestone.mutate(m.id)}
-                    className="shrink-0 rounded p-1 text-muted opacity-0 transition hover:text-coral group-hover:opacity-100"
-                    title="删除里程碑"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
 
-      {/* 视图切换 */}
-      {(reqs.data ?? []).length > 0 && (
-        <div className="mb-4 flex items-center gap-2">
-          <button
-            onClick={() => setViewMode('list')}
-            className={cn(
-              'flex items-center gap-1 rounded-lg px-3 py-1.5 text-12px font-650 transition',
-              viewMode === 'list' ? 'bg-violet-light text-violet' : 'text-muted hover:bg-surface hover:text-ink',
-            )}
-          >
-            <ListTree size={13} /> 需求列表
-          </button>
-          <button
-            onClick={() => setViewMode('timeline')}
-            className={cn(
-              'flex items-center gap-1 rounded-lg px-3 py-1.5 text-12px font-650 transition',
-              viewMode === 'timeline' ? 'bg-violet-light text-violet' : 'text-muted hover:bg-surface hover:text-ink',
-            )}
-          >
-            <ChartGantt size={13} /> 时间线
-          </button>
+          {(milestones.data ?? []).length > 0 && (
+            <FilterBar
+              nameLabel="名称"
+              name={msFilter.name}
+              timeLabel="截止"
+              from={msFilter.from}
+              to={msFilter.to}
+              onName={(v) => setMsFilter((s) => ({ ...s, name: v }))}
+              onFrom={(v) => setMsFilter((s) => ({ ...s, from: v }))}
+              onTo={(v) => setMsFilter((s) => ({ ...s, to: v }))}
+            />
+          )}
+
+          {milestones.isLoading ? (
+            <div className="py-4 text-center"><Spinner size={16} /></div>
+          ) : filteredMilestones.length === 0 ? (
+            <Empty icon="/pulse-projects.svg" title={(milestones.data ?? []).length === 0 ? '暂无里程碑' : '没有匹配的里程碑'} desc={(milestones.data ?? []).length === 0 ? '设置关键节点以跟踪项目进展' : '试试调整筛选条件'} />
+          ) : (
+            <div className="overflow-hidden rounded-lg border border-line bg-white">
+              <table className={TABLE}>
+                <thead>
+                  <tr className="border-b border-line bg-surface/50">
+                    <th className={TH}>完成</th>
+                    <th className={TH}>标题</th>
+                    <th className={TH}>状态</th>
+                    <th className={TH}>截止日期</th>
+                    <th className={TH}>完成日期</th>
+                    <th className={TH}>需求 · 任务</th>
+                    <th className={`${TH} text-right`}>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredMilestones.map((m) => {
+                    const done = !!m.completed_at;
+                    const overdue = !done && m.due_date && new Date(m.due_date).getTime() < Date.now();
+                    const status = done ? '已完成' : overdue ? '已逾期' : '进行中';
+                    const statusCls = done ? 'text-green' : overdue ? 'text-coral font-650' : 'text-ink';
+                    return (
+                      <tr key={m.id} className={ROW}>
+                        <td className={CELL}>
+                          <button
+                            onClick={() => toggleMilestone.mutate(m.id)}
+                            className={cn('transition', done ? 'text-green' : 'text-muted hover:text-green')}
+                            title={done ? '取消完成' : '标记完成'}
+                          >
+                            {done ? <CheckCircle2 size={15} /> : <Circle size={15} />}
+                          </button>
+                        </td>
+                        <td className={`${CELL} max-w-76 min-w-0`}>
+                          <p className={cn('truncate font-650', done ? 'text-muted line-through' : 'text-ink')} title={m.title}>{m.title}</p>
+                          {m.description && <p className="truncate text-11px text-muted" title={m.description}>{m.description}</p>}
+                        </td>
+                        <td className={`${CELL} whitespace-nowrap`}>
+                          <span className={cn('flex items-center gap-1', statusCls)}>
+                            <span className={cn('h-1.5 w-1.5 rounded-full', done ? 'bg-green' : overdue ? 'bg-coral' : 'bg-violet')} />
+                            {status}
+                          </span>
+                        </td>
+                        <td className={`${CELL} whitespace-nowrap`}>
+                          {m.due_date ? (
+                            <span className={overdue ? 'font-650 text-coral' : 'text-muted'}>{new Date(m.due_date).toLocaleDateString()}</span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                        </td>
+                        <td className={`${CELL} whitespace-nowrap`}>
+                          {done && m.completed_at ? (
+                            <span className="text-green">{new Date(m.completed_at).toLocaleDateString()}</span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                        </td>
+                        <td className={`${CELL} whitespace-nowrap text-violet/80`}>{m.requirement_count} · {m.task_count}</td>
+                        <td className={`${CELL} whitespace-nowrap text-right`}>
+                          <div className="inline-flex items-center gap-0.5">
+                            <button onClick={() => openEditMilestone(m)} className={opBtn} title="编辑里程碑">
+                              <Pencil size={13} />
+                            </button>
+                            <button onClick={() => removeMilestone.mutate(m.id)} className={opBtnDanger} title="删除里程碑">
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
-      {/* 需求列表 / 时间线 */}
-      {reqs.isLoading ? (
-        <div className="py-12 text-center"><Spinner size={20} /></div>
-      ) : (reqs.data ?? []).length === 0 ? (
-        <Empty icon="/pulse-projects.svg" title="还没有需求" desc="添加需求，或用 AI 一键拆解为任务" />
-      ) : viewMode === 'timeline' ? (
-        <GanttView requirements={reqs.data ?? []} tasksByReq={tasksByReq.data ?? {}} />
-      ) : (
-        <div className="space-y-4">
-          {(reqs.data ?? []).sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]).map((r) => {
-            const isOpen = expanded.has(r.id);
-            const tasks = tasksByReq.data?.[r.id] ?? [];
-            const pct = tasks.length ? Math.round((tasks.filter((t) => t.status === 'done').length / tasks.length) * 100) : 0;
-            return (
-              <div key={r.id} className="card overflow-hidden">
-                <div className="flex cursor-pointer items-center gap-3 px-5 py-4 transition hover:bg-surface" onClick={() => toggle(r.id)}>
-                  <button className="text-muted hover:text-violet">{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-14px font-650 text-ink">{r.title}</span>
-                      <Badge value={r.priority} />
-                    </div>
-                    <p className="mt-0.5 truncate text-12px text-muted">{r.description || '无描述'}</p>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-10px text-muted">
-                      {r.owner_name && <span>👤 {r.owner_name}</span>}
-                      {(r.collaborators ?? []).length > 0 && (
-                        <span className="flex items-center gap-1"><Users size={10} /> {r.collaborators.map((c) => c.name).join('、')}</span>
-                      )}
-                      {rangeSummary(r.plan_start_at, r.plan_end_at) && <span className="text-violet/70">{rangeSummary(r.plan_start_at, r.plan_end_at)}</span>}
-                    </div>
-                  </div>
-                  <Badge value={r.status} />
-                  <span className="text-12px text-muted">
-                    {tasks.filter((t) => t.status === 'done').length}/{tasks.length} 任务
-                  </span>
-                  <div className="h-1.5 w-24 overflow-hidden rounded-full bg-line">
-                    <div className="h-full rounded-full bg-gradient-to-r from-violet to-violet-dark" style={{ width: `${pct}%` }} />
-                  </div>
-                  <button
-                    className="rounded-lg p-1.5 text-muted transition hover:bg-violet-light hover:text-violet"
-                    onClick={(e) => { e.stopPropagation(); openEditReq(r); }}
-                    title="编辑需求"
-                  >
-                    <Pencil size={15} />
-                  </button>
-                  <button
-                    className="rounded-lg p-1.5 text-muted transition hover:bg-violet-light hover:text-violet"
-                    onClick={(e) => { e.stopPropagation(); openNewTask(r.id); }}
-                    title="添加任务"
-                  >
-                    <Plus size={15} />
-                  </button>
-                </div>
+      {/* ===== 需求 Tab ===== */}
+      {tab === 'requirement' && (
+        <>
+          {(reqs.data ?? []).length > 0 && (
+            <FilterBar
+              nameLabel="名称"
+              name={reqFilter.name}
+              timeLabel="计划"
+              from={reqFilter.from}
+              to={reqFilter.to}
+              sort={reqFilter.sort}
+              sortOptions={[
+                { value: 'priority', label: '按优先级' },
+                { value: 'plan', label: '按计划开始' },
+                { value: 'updated', label: '按最近更新' },
+              ]}
+              onName={(v) => setReqFilter((s) => ({ ...s, name: v }))}
+              onFrom={(v) => setReqFilter((s) => ({ ...s, from: v }))}
+              onTo={(v) => setReqFilter((s) => ({ ...s, to: v }))}
+              onSort={(v) => setReqFilter((s) => ({ ...s, sort: v }))}
+            />
+          )}
 
-                {isOpen && (
-                  <div className="border-t border-line bg-surface/50 p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <span className="text-12px font-600 text-muted">任务看板</span>
-                      <button className="btn btn-soft" onClick={() => openAiGenTasks(r)}>
-                        <Sparkles size={13} /> AI 生成任务
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-4 gap-3">
-                      {TASK_COLUMNS.map((col) => {
-                        const colTasks = tasks.filter((t) => t.status === col.key);
-                        const isDropTarget = dragOverCol === col.key;
-                        return (
-                          <div
-                            key={col.key}
-                            className={cn(
-                              'rounded-xl bg-white p-3 transition',
-                              isDropTarget && `ring-2 ${col.ring}`,
-                            )}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              setDragOverCol(col.key);
-                            }}
-                            onDragEnter={() => setDragOverCol(col.key)}
-                            onDragLeave={() => setDragOverCol(null)}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              setDragOverCol(null);
-                              if (draggingTask && draggingTask.status !== col.key) {
-                                moveTask.mutate({ t: draggingTask, status: col.key });
-                              }
-                              setDraggingTask(null);
-                            }}
-                          >
-                            <div className={cn('mb-2 flex items-center justify-between rounded-lg px-2 py-1.5', col.bg)}>
-                              <span className={cn('text-12px font-650', col.color)}>{col.label}</span>
-                              <span className={cn('text-11px font-650', col.color)}>{colTasks.length}</span>
-                            </div>
-                            <div className="space-y-2">
-                              {colTasks.map((t) => (
-                                <div
-                                  key={t.id}
-                                  draggable
-                                  onDragStart={() => setDraggingTask(t)}
-                                  onDragEnd={() => {
-                                    setDraggingTask(null);
-                                    setDragOverCol(null);
-                                  }}
-                                  className="group cursor-grab rounded-lg border border-line p-2.5 transition hover:border-violet-border hover:shadow-sm active:cursor-grabbing"
-                                >
-                                  <div className="flex items-start justify-between gap-1">
-                                    <p className="text-12px font-600 leading-5 text-ink">{t.title}</p>
-                                    <div className="flex shrink-0 items-center gap-0.5">
-                                      <button
-                                        onClick={() => openEditTask(t)}
-                                        className="rounded p-0.5 text-muted opacity-0 transition hover:text-violet group-hover:opacity-100"
-                                        title="编辑任务"
-                                      >
-                                        <Pencil size={12} />
-                                      </button>
-                                      <button
-                                        onClick={() => delTask.mutate(t.id)}
-                                        className="rounded p-0.5 text-muted opacity-0 transition hover:text-coral group-hover:opacity-100"
-                                        title="删除"
-                                      >
-                                        <Trash2 size={12} />
-                                      </button>
-                                    </div>
-                                  </div>
-                                  {t.assignee_name && <p className="mt-1 text-10px text-muted">👤 {t.assignee_name}</p>}
-                                  {(t.collaborators ?? []).length > 0 && (
-                                    <p className="mt-0.5 text-10px text-muted"><Users size={10} className="mr-0.5 inline" /> {t.collaborators.map((c) => c.name).join('、')}</p>
-                                  )}
-                                  {(() => {
-                                    const plan = rangeSummary(t.plan_start_at, t.plan_end_at);
-                                    const actual = rangeSummary(t.actual_start_at, t.actual_end_at);
-                                    return (plan || actual) ? (
-                                      <p className="mt-0.5 text-10px text-violet/70">{plan}{actual ? ` 实际 ${actual}` : ''}</p>
-                                    ) : null;
-                                  })()}
-                                </div>
-                              ))}
-                              {colTasks.length === 0 && (
-                                <div className="rounded-lg border border-dashed border-line py-3 text-center text-11px text-muted">空</div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
+          {(reqs.data ?? []).length > 0 && (
+            <div className="mb-4 flex items-center gap-2">
+              <button
+                onClick={() => setViewMode('list')}
+                className={cn(
+                  'flex items-center gap-1 rounded-lg px-3 py-1.5 text-12px font-650 transition',
+                  viewMode === 'list' ? 'bg-violet-light text-violet' : 'text-muted hover:bg-surface hover:text-ink',
                 )}
-              </div>
-            );
-          })}
+              >
+                <ListTree size={13} /> 列表
+              </button>
+              <button
+                onClick={() => setViewMode('timeline')}
+                className={cn(
+                  'flex items-center gap-1 rounded-lg px-3 py-1.5 text-12px font-650 transition',
+                  viewMode === 'timeline' ? 'bg-violet-light text-violet' : 'text-muted hover:bg-surface hover:text-ink',
+                )}
+              >
+                <ChartGantt size={13} /> 时间线
+              </button>
+            </div>
+          )}
+
+          {reqs.isLoading ? (
+            <div className="py-12 text-center"><Spinner size={20} /></div>
+          ) : (reqs.data ?? []).length === 0 ? (
+            <Empty icon="/pulse-projects.svg" title="还没有需求" desc="添加需求，或用 AI 一键拆解为任务" />
+          ) : filteredReqs.length === 0 ? (
+            <Empty icon="/pulse-projects.svg" title="没有匹配的需求" desc="试试调整筛选条件" />
+          ) : viewMode === 'timeline' ? (
+            <GanttView requirements={reqs.data ?? []} tasksByReq={tasksByReq.data ?? {}} />
+          ) : (
+            <div className="overflow-hidden rounded-lg border border-line bg-white">
+              <table className={TABLE}>
+                <thead>
+                  <tr className="border-b border-line bg-surface/50">
+                    <th className={TH}>标题</th>
+                    <th className={TH}>负责</th>
+                    <th className={TH}>优先级</th>
+                    <th className={TH}>状态</th>
+                    <th className={TH}>计划时间</th>
+                    <th className={TH}>任务进度</th>
+                    <th className={`${TH} text-right`}>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredReqs.map((r) => {
+                    const isOpen = expanded.has(r.id);
+                    const tasks = tasksByReq.data?.[r.id] ?? [];
+                    const total = r.task_count ?? tasks.length;
+                    const doneCount = r.done_task_count ?? tasks.filter((t) => t.status === 'done').length;
+                    const pct = total ? Math.round((doneCount / total) * 100) : 0;
+                    return (
+                      <Fragment key={r.id}>
+                        <tr className={`${ROW} cursor-pointer`} onClick={() => toggle(r.id)}>
+                          <td className={`${CELL} min-w-0 max-w-72`}>
+                            <div className="flex items-center gap-1">
+                              <span className="shrink-0 text-muted">{isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</span>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="truncate font-650 text-ink">{r.title}</span>
+                                  {r.milestone_name && (
+                                    <span className="inline-flex shrink-0 items-center gap-1 rounded bg-violet-light px-1.5 py-0.5 text-10px font-600 text-violet">
+                                      <Flag size={9} /> {r.milestone_name}
+                                    </span>
+                                  )}
+                                </div>
+                                {r.description && <p className="truncate text-11px text-muted">{r.description}</p>}
+                              </div>
+                            </div>
+                          </td>
+                          <td className={`${CELL} whitespace-nowrap text-muted`}>{r.owner_name || '—'}</td>
+                          <td className={`${CELL} whitespace-nowrap`}><Badge value={r.priority} /></td>
+                          <td className={`${CELL} whitespace-nowrap`}><Badge value={r.status} /></td>
+                          <td className={`${CELL} whitespace-nowrap`}>
+                            {rangeSummary(r.plan_start_at, r.plan_end_at) ? (
+                              <span className="text-violet/70">{rangeSummary(r.plan_start_at, r.plan_end_at)}</span>
+                            ) : (
+                              <span className="text-muted">—</span>
+                            )}
+                          </td>
+                          <td className={`${CELL} whitespace-nowrap`}>
+                            <div className="flex items-center gap-1.5">
+                              <div className="h-1.5 w-16 overflow-hidden rounded-full bg-line">
+                                <div className="h-full rounded-full bg-gradient-to-r from-violet to-violet-dark" style={{ width: `${pct}%` }} />
+                              </div>
+                              <span className="text-11px text-muted">{doneCount}/{total}</span>
+                            </div>
+                          </td>
+                          <td className={`${CELL} whitespace-nowrap text-right`}>
+                            <div className="inline-flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                              <button onClick={() => openEditReq(r)} className={opBtn} title="编辑需求"><Pencil size={13} /></button>
+                              <button onClick={() => delReq.mutate(r.id)} className={opBtnDanger} title="删除需求"><Trash2 size={13} /></button>
+                              <button onClick={() => openNewTask(r.id)} className={opBtn} title="添加任务"><Plus size={13} /></button>
+                            </div>
+                          </td>
+                        </tr>
+                        {isOpen && (
+                          <tr className="bg-surface/40">
+                            <td className={`${CELL} px-3 py-3`} colSpan={7}>
+                              <div>
+                                <div className="mb-2 flex items-center justify-between">
+                                  <span className="text-11px font-600 text-muted">任务看板</span>
+                                  <button className="btn btn-soft" onClick={() => openAiGenTasks(r)}>
+                                    <Sparkles size={12} /> AI 生成任务
+                                  </button>
+                                </div>
+                                <div className="grid grid-cols-4 gap-2">
+                                  {TASK_COLUMNS.map((col) => {
+                                    const colTasks = tasks.filter((t) => t.status === col.key);
+                                    const isDropTarget = dragOverCol === col.key;
+                                    return (
+                                      <div
+                                        key={col.key}
+                                        className={cn(
+                                          'rounded-xl bg-white p-2 transition',
+                                          isDropTarget && `ring-2 ${col.ring}`,
+                                        )}
+                                        onDragOver={(e) => {
+                                          e.preventDefault();
+                                          setDragOverCol(col.key);
+                                        }}
+                                        onDragEnter={() => setDragOverCol(col.key)}
+                                        onDragLeave={() => setDragOverCol(null)}
+                                        onDrop={(e) => {
+                                          e.preventDefault();
+                                          setDragOverCol(null);
+                                          if (draggingTask && draggingTask.status !== col.key) {
+                                            moveTask.mutate({ t: draggingTask, status: col.key });
+                                          }
+                                          setDraggingTask(null);
+                                        }}
+                                      >
+                                        <div className={cn('mb-2 flex items-center justify-between rounded-lg px-2 py-1', col.bg)}>
+                                          <span className={cn('text-11px font-650', col.color)}>{col.label}</span>
+                                          <span className={cn('text-10px font-650', col.color)}>{colTasks.length}</span>
+                                        </div>
+                                        <div className="space-y-1.5">
+                                          {colTasks.map((t) => (
+                                            <div
+                                              key={t.id}
+                                              draggable
+                                              onDragStart={() => setDraggingTask(t)}
+                                              onDragEnd={() => {
+                                                setDraggingTask(null);
+                                                setDragOverCol(null);
+                                              }}
+                                              className="group cursor-grab rounded-lg border border-line p-2 transition hover:border-violet-border hover:shadow-sm active:cursor-grabbing"
+                                            >
+                                              <div className="flex items-start justify-between gap-1">
+                                                <p className="text-11px font-600 leading-5 text-ink">{t.title}</p>
+                                                <div className="flex shrink-0 items-center gap-0.5">
+                                                  <button
+                                                    onClick={() => openEditTask(t)}
+                                                    className="rounded p-0.5 text-muted opacity-0 transition hover:text-violet group-hover:opacity-100"
+                                                    title="编辑任务"
+                                                  >
+                                                    <Pencil size={11} />
+                                                  </button>
+                                                  <button
+                                                    onClick={() => delTask.mutate(t.id)}
+                                                    className="rounded p-0.5 text-muted opacity-0 transition hover:text-coral group-hover:opacity-100"
+                                                    title="删除"
+                                                  >
+                                                    <Trash2 size={11} />
+                                                  </button>
+                                                </div>
+                                              </div>
+                                              {t.assignee_name && <p className="mt-1 text-10px text-muted">👤 {t.assignee_name}</p>}
+                                              {(t.collaborators ?? []).length > 0 && (
+                                                <p className="mt-0.5 text-10px text-muted"><Users size={10} className="mr-0.5 inline" /> {t.collaborators.map((c) => c.name).join('、')}</p>
+                                              )}
+                                              {(() => {
+                                                const plan = rangeSummary(t.plan_start_at, t.plan_end_at);
+                                                const actual = rangeSummary(t.actual_start_at, t.actual_end_at);
+                                                return (plan || actual) ? (
+                                                  <p className="mt-0.5 text-10px text-violet/70">{plan}{actual ? ` 实际 ${actual}` : ''}</p>
+                                                ) : null;
+                                              })()}
+                                            </div>
+                                          ))}
+                                          {colTasks.length === 0 && (
+                                            <div className="rounded-lg border border-dashed border-line py-2 text-center text-10px text-muted">空</div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ===== 任务 Tab ===== */}
+      {tab === 'task' && (
+        <div className="mb-6">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-11px text-muted">{filteredTasks.length}/{projectTasks.data?.length ?? 0} 项</span>
+            </div>
+            <button className="btn btn-primary" onClick={() => openNewTask('')}>
+              <Plus size={14} /> 添加任务
+            </button>
+          </div>
+
+          {(projectTasks.data ?? []).length > 0 && (
+            <FilterBar
+              nameLabel="名称"
+              name={taskFilter.name}
+              timeLabel="截止"
+              from={taskFilter.from}
+              to={taskFilter.to}
+              sort={taskFilter.sort}
+              sortOptions={[
+                { value: 'updated', label: '按最近更新' },
+                { value: 'due', label: '按截止时间' },
+              ]}
+              onName={(v) => setTaskFilter((s) => ({ ...s, name: v }))}
+              onFrom={(v) => setTaskFilter((s) => ({ ...s, from: v }))}
+              onTo={(v) => setTaskFilter((s) => ({ ...s, to: v }))}
+              onSort={(v) => setTaskFilter((s) => ({ ...s, sort: v }))}
+            />
+          )}
+
+          {projectTasks.isLoading ? (
+            <div className="py-12 text-center"><Spinner size={20} /></div>
+          ) : (projectTasks.data ?? []).length === 0 ? (
+            <Empty icon="/pulse-projects.svg" title="还没有任务" desc="添加任务，或用 AI 一键拆解" />
+          ) : filteredTasks.length === 0 ? (
+            <Empty icon="/pulse-projects.svg" title="没有匹配的任务" desc="试试调整筛选条件" />
+          ) : (
+            <div className="overflow-hidden rounded-lg border border-line bg-white">
+              <table className={TABLE}>
+                <thead>
+                  <tr className="border-b border-line bg-surface/50">
+                    <th className={TH}>标题</th>
+                    <th className={TH}>负责人</th>
+                    <th className={TH}>优先级</th>
+                    <th className={TH}>状态</th>
+                    <th className={TH}>截止</th>
+                    <th className={TH}>计划 / 实际</th>
+                    <th className={`${TH} text-right`}>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTasks.map((t) => {
+                    const overdue = t.due_date && new Date(t.due_date).getTime() < Date.now() && t.status !== 'done';
+                    const plan = rangeSummary(t.plan_start_at, t.plan_end_at);
+                    const actual = rangeSummary(t.actual_start_at, t.actual_end_at);
+                    const timeText = [plan && `计划 ${plan}`, actual && `实际 ${actual}`].filter(Boolean).join('  ');
+                    return (
+                      <tr key={t.id} className={ROW}>
+                        <td className={`${CELL} min-w-0 max-w-96`}>
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate font-600 text-ink" title={t.title}>{t.title}</span>
+                            {t.status === 'done' && <Check size={12} className="shrink-0 text-green" />}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            {t.requirement_title && (
+                              <span className="inline-flex items-center gap-1 rounded bg-surface px-1.5 py-0.5 text-10px text-muted"><ListTree size={9} /> {t.requirement_title}</span>
+                            )}
+                            {t.milestone_name && (
+                              <span className="inline-flex items-center gap-1 rounded bg-violet-light px-1.5 py-0.5 text-10px text-violet"><Flag size={9} /> {t.milestone_name}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className={`${CELL} whitespace-nowrap text-muted`}>{t.assignee_name || '—'}</td>
+                        <td className={`${CELL} whitespace-nowrap`}><Badge value={t.priority} /></td>
+                        <td className={`${CELL} whitespace-nowrap`}><Badge value={t.status} /></td>
+                        <td className={`${CELL} whitespace-nowrap`}>
+                          {t.due_date ? (
+                            <span className={overdue ? 'font-650 text-coral' : 'text-muted'}>{new Date(t.due_date).toLocaleDateString()}</span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                        </td>
+                        <td className={`${CELL} whitespace-nowrap`}>
+                          {timeText ? <span className="text-violet/70">{timeText}</span> : <span className="text-muted">—</span>}
+                        </td>
+                        <td className={`${CELL} whitespace-nowrap text-right`}>
+                          <div className="inline-flex items-center gap-0.5">
+                            <button onClick={() => openEditTask(t)} className={opBtn} title="编辑任务"><Pencil size={13} /></button>
+                            <button onClick={() => delTask.mutate(t.id)} className={opBtnDanger} title="删除任务"><Trash2 size={13} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -869,6 +1277,15 @@ export function ProjectDetail() {
           )}
         </div>
         <div className="form-group">
+          <label>归属里程碑</label>
+          <select className="form-input" value={reqForm.milestoneId} onChange={(e) => setReqForm({ ...reqForm, milestoneId: e.target.value })}>
+            <option value="">无里程碑</option>
+            {(milestones.data ?? []).map((m) => (
+              <option key={m.id} value={m.id}>{m.title}</option>
+            ))}
+          </select>
+        </div>
+        <div className="form-group">
           <label>负责人</label>
           <UserPicker value={reqForm.owner} onChange={(owner) => setReqForm({ ...reqForm, owner })} multiple={false} placeholder="搜索并选择负责人" />
         </div>
@@ -903,6 +1320,17 @@ export function ProjectDetail() {
           <label>任务描述</label>
           <textarea className="form-input min-h-16 resize-none" value={taskForm.description} onChange={(e) => setTaskForm({ ...taskForm, description: e.target.value })} placeholder="任务说明…" />
         </div>
+        {!taskForm.id && (
+          <div className="form-group">
+            <label>归属需求</label>
+            <select className="form-input" value={taskForm.requirementId} onChange={(e) => setTaskForm({ ...taskForm, requirementId: e.target.value })}>
+              <option value="">请选择需求</option>
+              {(reqs.data ?? []).map((r) => (
+                <option key={r.id} value={r.id}>{r.title}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div className="form-group">
             <label>优先级</label>
@@ -917,6 +1345,15 @@ export function ProjectDetail() {
             <label>截止时间</label>
             <input type="datetime-local" className="form-input" value={taskForm.dueDate} onChange={(e) => setTaskForm({ ...taskForm, dueDate: e.target.value })} />
           </div>
+        </div>
+        <div className="form-group">
+          <label>归属里程碑</label>
+          <select className="form-input" value={taskForm.milestoneId} onChange={(e) => setTaskForm({ ...taskForm, milestoneId: e.target.value })}>
+            <option value="">无里程碑</option>
+            {(milestones.data ?? []).map((m) => (
+              <option key={m.id} value={m.id}>{m.title}</option>
+            ))}
+          </select>
         </div>
         {taskForm.id && (
           <div className="form-group">
@@ -948,7 +1385,7 @@ export function ProjectDetail() {
         {taskForm.id && <CommentThread targetType="task" targetId={taskForm.id} />}
         <div className="flex justify-end gap-2">
           <button className="btn btn-ghost" onClick={() => setTaskModalOpen(false)}>取消</button>
-          <button className="btn btn-primary" disabled={!taskForm.title.trim() || createTask.isPending || updateTask.isPending} onClick={() => (taskForm.id ? updateTask.mutate() : createTask.mutate())}>
+          <button className="btn btn-primary" disabled={!taskForm.title.trim() || (taskForm.id ? false : !taskForm.requirementId) || createTask.isPending || updateTask.isPending} onClick={() => (taskForm.id ? updateTask.mutate() : createTask.mutate())}>
             {(createTask.isPending || updateTask.isPending) ? <Spinner size={14} /> : null} {taskForm.id ? '保存' : '创建'}
           </button>
         </div>
@@ -992,6 +1429,48 @@ export function ProjectDetail() {
             onClick={() => createMilestone.mutate()}
           >
             {createMilestone.isPending ? <Spinner size={14} /> : null} 创建
+          </button>
+        </div>
+      </Modal>
+
+      {/* 编辑里程碑 */}
+      <Modal open={milestoneEdit.open} onClose={() => setMilestoneEdit({ ...milestoneEdit, open: false })} title="编辑里程碑" width={480}>
+        <div className="form-group">
+          <label>里程碑标题</label>
+          <input
+            className="form-input"
+            value={milestoneEdit.title}
+            onChange={(e) => setMilestoneEdit({ ...milestoneEdit, title: e.target.value })}
+            placeholder="例如：MVP 版本上线"
+            autoFocus
+          />
+        </div>
+        <div className="form-group">
+          <label>描述</label>
+          <textarea
+            className="form-input min-h-16 resize-none"
+            value={milestoneEdit.desc}
+            onChange={(e) => setMilestoneEdit({ ...milestoneEdit, desc: e.target.value })}
+            placeholder="里程碑范围、交付物…"
+          />
+        </div>
+        <div className="form-group">
+          <label>截止日期</label>
+          <input
+            type="datetime-local"
+            className="form-input"
+            value={milestoneEdit.due}
+            onChange={(e) => setMilestoneEdit({ ...milestoneEdit, due: e.target.value })}
+          />
+        </div>
+        <div className="flex justify-end gap-2">
+          <button className="btn btn-ghost" onClick={() => setMilestoneEdit({ ...milestoneEdit, open: false })}>取消</button>
+          <button
+            className="btn btn-primary"
+            disabled={!milestoneEdit.title.trim() || updateMilestone.isPending}
+            onClick={() => updateMilestone.mutate()}
+          >
+            {updateMilestone.isPending ? <Spinner size={14} /> : null} 保存
           </button>
         </div>
       </Modal>

@@ -21,6 +21,9 @@ export const commentTargetEnum = pgEnum('comment_target', ['requirement', 'task'
 export const notificationTypeEnum = pgEnum('notification_type', ['comment', 'task_assigned', 'doc_comment', 'mention']);
 export const sharePermissionEnum = pgEnum('share_permission', ['read', 'edit']);
 export const aiRoleEnum = pgEnum('ai_role', ['user', 'assistant']);
+export const docVisibilityEnum = pgEnum('doc_visibility', ['private', 'team', 'public']);
+export const docBasePermEnum = pgEnum('doc_base_permission', ['read', 'edit']);
+export const docAccessPermEnum = pgEnum('doc_access_permission', ['read', 'edit', 'manage']);
 
 // ===== 用户 =====
 export const users = pgTable('users', {
@@ -87,6 +90,8 @@ export const documents = pgTable('documents', {
   icon: varchar('icon', { length: 50 }),
   cover: varchar('cover', { length: 500 }),
   last_viewed_at: timestamp('last_viewed_at', { withTimezone: true }),
+  visibility: docVisibilityEnum('visibility').notNull().default('private'),
+  base_permission: docBasePermEnum('base_permission').notNull().default('edit'),
   deleted_at: timestamp('deleted_at', { withTimezone: true }),
   created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -106,6 +111,24 @@ export const documentShares = pgTable('document_shares', {
     .notNull(),
   created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// ===== 文档逐成员授权 =====
+export const documentAccess = pgTable(
+  'document_access',
+  {
+    doc_id: uuid('doc_id')
+      .references(() => documents.id, { onDelete: 'cascade' })
+      .notNull(),
+    user_id: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    permission: docAccessPermEnum('permission').notNull().default('read'),
+    granted_by: uuid('granted_by').references(() => users.id, { onDelete: 'set null' }),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [{ pk: { name: 'document_access_pk', columns: [t.doc_id, t.user_id] } }],
+);
 
 // ===== 文档模板 =====
 export const docTemplates = pgTable('doc_templates', {
@@ -193,6 +216,7 @@ export const requirements = pgTable('requirements', {
   status: requirementStatusEnum('status').notNull().default('open'),
   priority: varchar('priority', { length: 10 }).notNull().default('medium'),
   owner_id: uuid('owner_id').references(() => users.id, { onDelete: 'set null' }),
+  milestone_id: uuid('milestone_id').references(() => milestones.id, { onDelete: 'set null' }),
   plan_start_at: timestamp('plan_start_at', { withTimezone: true }),
   plan_end_at: timestamp('plan_end_at', { withTimezone: true }),
   actual_start_at: timestamp('actual_start_at', { withTimezone: true }),
@@ -212,6 +236,7 @@ export const tasks = pgTable('tasks', {
   status: taskStatusEnum('status').notNull().default('todo'),
   priority: varchar('priority', { length: 10 }).notNull().default('medium'),
   assignee_id: uuid('assignee_id').references(() => users.id, { onDelete: 'set null' }),
+  milestone_id: uuid('milestone_id').references(() => milestones.id, { onDelete: 'set null' }),
   due_date: timestamp('due_date', { withTimezone: true }),
   plan_start_at: timestamp('plan_start_at', { withTimezone: true }),
   plan_end_at: timestamp('plan_end_at', { withTimezone: true }),

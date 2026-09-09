@@ -88,6 +88,16 @@ export type AddMemberRequest = z.infer<typeof AddMemberRequest>;
 export const DocKind = z.enum(['doc', 'wiki', 'sheet']);
 export type DocKind = z.infer<typeof DocKind>;
 
+// ==== 文档权限 =====
+export const DocVisibility = z.enum(['private', 'team', 'public']);
+export type DocVisibility = z.infer<typeof DocVisibility>;
+export const DocBasePermission = z.enum(['read', 'edit']);
+export type DocBasePermission = z.infer<typeof DocBasePermission>;
+export const EffectivePermission = z.enum(['none', 'read', 'edit', 'manage']);
+export type EffectivePermission = z.infer<typeof EffectivePermission>;
+export const DocAccessPermission = z.enum(['read', 'edit', 'manage']);
+export type DocAccessPermission = z.infer<typeof DocAccessPermission>;
+
 export const Document = z.object({
   id: z.string(),
   team_id: z.string().nullable(),
@@ -102,6 +112,9 @@ export const Document = z.object({
   cover: z.string().nullable(),
   last_viewed_at: z.string().nullable(),
   is_favorite: z.boolean(),
+  visibility: DocVisibility,
+  base_permission: DocBasePermission,
+  effective_permission: EffectivePermission,
   created_at: z.string(),
   updated_at: z.string(),
 });
@@ -120,6 +133,8 @@ export const CreateDocRequest = z.object({
   content: z.string().optional().default(''),
   icon: z.string().optional(),
   cover: z.string().optional(),
+  visibility: DocVisibility.optional(),
+  base_permission: DocBasePermission.optional(),
 });
 export type CreateDocRequest = z.infer<typeof CreateDocRequest>;
 
@@ -130,8 +145,27 @@ export const UpdateDocRequest = z.object({
   is_folder: z.boolean().optional(),
   icon: z.string().nullable().optional(),
   cover: z.string().nullable().optional(),
+  visibility: DocVisibility.optional(),
+  base_permission: DocBasePermission.optional(),
 });
 export type UpdateDocRequest = z.infer<typeof UpdateDocRequest>;
+
+// ===== 文档逐成员授权 =====
+export const DocumentAccessItem = z.object({
+  user_id: z.string(),
+  name: z.string(),
+  email: z.string(),
+  avatar_url: z.string().nullable(),
+  permission: DocAccessPermission,
+  team_role: TeamRole.nullable(),
+});
+export type DocumentAccessItem = z.infer<typeof DocumentAccessItem>;
+
+export const SetDocAccessRequest = z.object({
+  user_id: z.string(),
+  permission: DocAccessPermission,
+});
+export type SetDocAccessRequest = z.infer<typeof SetDocAccessRequest>;
 
 // ===== 文档版本历史 =====
 export const DocumentVersion = z.object({
@@ -251,6 +285,8 @@ export const Requirement = z.object({
   priority: z.string(),
   owner_id: z.string().nullable(),
   owner_name: z.string().nullable(),
+  milestone_id: z.string().nullable(),
+  milestone_name: z.string().nullable(),
   plan_start_at: DateTimeField,
   plan_end_at: DateTimeField,
   actual_start_at: DateTimeField,
@@ -269,6 +305,7 @@ export const CreateRequirementRequest = z.object({
   description: z.string().max(5000).optional().default(''),
   priority: z.enum(['low', 'medium', 'high', 'urgent']).optional().default('medium'),
   owner_id: z.string().nullable().optional(),
+  milestone_id: z.string().nullable().optional(),
   plan_start_at: DateTimeField.optional(),
   plan_end_at: DateTimeField.optional(),
   actual_start_at: DateTimeField.optional(),
@@ -283,6 +320,7 @@ export const UpdateRequirementRequest = z.object({
   status: RequirementStatus.optional(),
   priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
   owner_id: z.string().nullable().optional(),
+  milestone_id: z.string().nullable().optional(),
   plan_start_at: DateTimeField.optional(),
   plan_end_at: DateTimeField.optional(),
   actual_start_at: DateTimeField.optional(),
@@ -298,6 +336,9 @@ export type TaskStatus = z.infer<typeof TaskStatus>;
 export const Task = z.object({
   id: z.string(),
   requirement_id: z.string(),
+  requirement_title: z.string().nullable(),
+  milestone_id: z.string().nullable(),
+  milestone_name: z.string().nullable(),
   title: z.string(),
   description: z.string(),
   status: TaskStatus,
@@ -322,6 +363,7 @@ export const CreateTaskRequest = z.object({
   description: z.string().max(5000).optional().default(''),
   priority: z.enum(['low', 'medium', 'high', 'urgent']).optional().default('medium'),
   assignee_id: z.string().optional(),
+  milestone_id: z.string().nullable().optional(),
   due_date: z.string().optional(),
   plan_start_at: DateTimeField.optional(),
   plan_end_at: DateTimeField.optional(),
@@ -337,6 +379,7 @@ export const UpdateTaskRequest = z.object({
   status: TaskStatus.optional(),
   priority: z.enum(['low', 'medium', 'high', 'urgent']).optional(),
   assignee_id: z.string().nullable().optional(),
+  milestone_id: z.string().nullable().optional(),
   due_date: z.string().nullable().optional(),
   plan_start_at: DateTimeField.optional(),
   plan_end_at: DateTimeField.optional(),
@@ -532,6 +575,8 @@ export const AdminDocument = z.object({
   owner_name: z.string().nullable(),
   team_id: z.string().nullable(),
   is_folder: z.boolean(),
+  visibility: DocVisibility,
+  base_permission: DocBasePermission,
   deleted_at: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
@@ -584,6 +629,8 @@ export const WikiTocItem = z.object({
   title: z.string(),
   parent_id: z.string().nullable(),
   updated_at: z.string(),
+  visibility: DocVisibility,
+  effective_permission: EffectivePermission,
 });
 export type WikiTocItem = z.infer<typeof WikiTocItem>;
 
@@ -595,6 +642,8 @@ export const Milestone = z.object({
   description: z.string(),
   due_date: z.string().nullable(),
   completed_at: z.string().nullable(),
+  requirement_count: z.number(),
+  task_count: z.number(),
   created_at: z.string(),
 });
 export type Milestone = z.infer<typeof Milestone>;
@@ -605,6 +654,13 @@ export const CreateMilestoneRequest = z.object({
   due_date: z.string().nullable().optional(),
 });
 export type CreateMilestoneRequest = z.infer<typeof CreateMilestoneRequest>;
+
+export const UpdateMilestoneRequest = z.object({
+  title: z.string().min(1).max(200).optional(),
+  description: z.string().max(2000).optional(),
+  due_date: z.string().nullable().optional(),
+});
+export type UpdateMilestoneRequest = z.infer<typeof UpdateMilestoneRequest>;
 
 // ===== 项目评论（需求 / 任务） =====
 export const CommentTargetType = z.enum(['requirement', 'task']);

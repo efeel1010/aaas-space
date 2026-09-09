@@ -5,7 +5,7 @@ import { Empty, Spinner, Badge, Modal, useToast, ConfirmModal, priorityOrder, cn
 import { UserPicker, type PickedUser } from '../components/UserPicker';
 import { fromLocalInput, toLocalInput, rangeSummary } from '../lib/datetime';
 import { FolderKanban, Plus, Trash2, ListTodo, Pencil, Users, CheckCircle2, Play, Clock, Target } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { Project } from '@pulse-space/contracts';
 
 type ProjectForm = {
@@ -52,6 +52,13 @@ export function ProjectsPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
 
   const teams = useQuery({ queryKey: ['teams'], queryFn: () => teamApi.list() });
+
+  // 团队 Tab 下，默认选中排名第一的团队（未手动选择时）
+  useEffect(() => {
+    if (scope === 'team' && !teamId && (teams.data ?? []).length > 0) {
+      setTeamId(teams.data![0].id);
+    }
+  }, [scope, teamId, teams.data]);
   const projects = useQuery({
     queryKey: ['projects', scope, teamId],
     queryFn: () => projectApi.list({ scope, teamId }),
@@ -171,15 +178,20 @@ export function ProjectsPage() {
             {s === 'personal' ? '个人项目' : '团队项目'}
           </button>
         ))}
-        {scope === 'team' && (
-          <select className="form-input ml-2 w-52 py-1.5" value={teamId ?? ''} onChange={(e) => setTeamId(e.target.value || undefined)}>
-            <option value="">选择团队</option>
+      </div>
+
+      {/* 团队选择：置于 Tab 下方，仅在团队 Tab 显示 */}
+      {scope === 'team' && (
+        <div className="mb-5 flex items-center gap-2">
+          <Users size={15} className="shrink-0 text-muted" />
+          <span className="shrink-0 whitespace-nowrap text-12px text-muted">团队</span>
+          <select className="form-input min-w-0 flex-1 py-1.5 sm:w-44" value={teamId ?? ''} onChange={(e) => setTeamId(e.target.value || undefined)}>
             {(teams.data ?? []).map((t) => (
               <option key={t.id} value={t.id}>{t.name}</option>
             ))}
           </select>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* 仪表盘 */}
       {!projects.isLoading && (projects.data ?? []).length > 0 && (

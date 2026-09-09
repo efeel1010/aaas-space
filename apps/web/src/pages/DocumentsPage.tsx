@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { docApi, teamApi, aiApi } from '../lib/api';
 import { Empty, Spinner, useToast, ConfirmModal, Modal } from '../components/ui';
-import { FileText, Folder, FolderOpen, Plus, Trash2, ChevronRight, Home, ChevronDown, Upload, Sparkles, Table2, LayoutTemplate } from 'lucide-react';
+import { FileText, Folder, FolderOpen, Plus, Trash2, ChevronRight, Home, ChevronDown, Upload, Sparkles, Table2, LayoutTemplate, Users } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { parseDocFile, IMPORT_ACCEPT } from '../lib/docimport';
 import type { Document, AiOrganizeNode, AiOrganizeFileInput } from '@pulse-space/contracts';
@@ -56,6 +56,13 @@ export function DocumentsPage() {
   const currentFolderTitle = path.length > 0 ? path[path.length - 1].title : '我的文档';
 
   const teams = useQuery({ queryKey: ['teams'], queryFn: () => teamApi.list() });
+
+  // 团队 Tab 下默认选中排名第一的团队（未手动选择时）
+  useEffect(() => {
+    if (scope === 'team' && !teamId && (teams.data ?? []).length > 0) {
+      setTeamId(teams.data![0].id);
+    }
+  }, [scope, teamId, teams.data]);
   const docs = useQuery({
     queryKey: ['docs', scope, teamId, currentFolderId ?? 'root'],
     // doc + sheet 在同一文档列表展示（kind 支持逗号分隔）
@@ -398,9 +405,15 @@ export function DocumentsPage() {
             {s === 'personal' ? '个人文档' : '团队文档'}
           </button>
         ))}
-        {scope === 'team' && (
+      </div>
+
+      {/* 团队选择：置于 Tab 下方，仅在团队 Tab 显示 */}
+      {scope === 'team' && (
+        <div className="mb-5 flex items-center gap-2">
+          <Users size={15} className="shrink-0 text-muted" />
+          <span className="shrink-0 whitespace-nowrap text-12px text-muted">团队</span>
           <select
-            className="form-input ml-2 w-52 py-1.5"
+            className="form-input min-w-0 flex-1 py-1.5 sm:w-44"
             value={teamId ?? ''}
             onChange={(e) => {
               setTeamId(e.target.value || undefined);
@@ -412,8 +425,8 @@ export function DocumentsPage() {
               <option key={t.id} value={t.id}>{t.name}</option>
             ))}
           </select>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* 面包屑导航：可逐级返回上级 */}
       <div className="mb-4 flex items-center gap-1 text-13px">

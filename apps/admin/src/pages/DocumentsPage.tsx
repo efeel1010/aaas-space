@@ -61,6 +61,8 @@ export function DocumentsPage() {
               <tr className="border-b border-line text-12px text-muted">
                 <th className="px-4 py-3 font-650">标题</th>
                 <th className="px-4 py-3 font-650">类型</th>
+                <th className="px-4 py-3 font-650">可见性</th>
+                <th className="px-4 py-3 font-650">基础权限</th>
                 <th className="px-4 py-3 font-650">所有者</th>
                 <th className="px-4 py-3 font-650">更新时间</th>
                 <th className="px-4 py-3 text-right font-650">操作</th>
@@ -82,6 +84,12 @@ export function DocumentsPage() {
                   </td>
                   <td className="px-4 py-3">
                     <Badge value={d.kind} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge value={d.visibility} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge value={d.base_permission} />
                   </td>
                   <td className="px-4 py-3 text-13px text-ink">{d.owner_name}</td>
                   <td className="px-4 py-3 text-12px text-muted">{new Date(d.updated_at).toLocaleString()}</td>

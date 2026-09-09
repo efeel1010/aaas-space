@@ -157,6 +157,8 @@ adminRouter.get('/documents', async (c) => {
       owner_name: users.name,
       team_id: documents.team_id,
       is_folder: documents.is_folder,
+      visibility: documents.visibility,
+      base_permission: documents.base_permission,
       deleted_at: documents.deleted_at,
       created_at: documents.created_at,
       updated_at: documents.updated_at,

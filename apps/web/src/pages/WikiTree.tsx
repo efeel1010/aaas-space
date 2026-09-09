@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { docApi, teamApi } from '../lib/api';
@@ -13,6 +13,7 @@ import {
   Pencil,
   Move,
   Search,
+  Users,
 } from 'lucide-react';
 import type { Document, WikiTocItem } from '@pulse-space/contracts';
 
@@ -66,6 +67,14 @@ export function WikiTree() {
   const [search, setSearch] = useState('');
 
   const teams = useQuery({ queryKey: ['teams'], queryFn: () => teamApi.list() });
+
+  // 团队 Tab 下默认选中排名第一的团队（未手动选择时）
+  useEffect(() => {
+    if (scope === 'team' && !teamId && (teams.data ?? []).length > 0) {
+      setTeamId(teams.data![0].id);
+      resetTree();
+    }
+  }, [scope, teamId, teams.data]);
   // 顶层（树结构，懒加载）
   const roots = useQuery({
     queryKey: ['wiki', scope, teamId],
@@ -265,15 +274,20 @@ export function WikiTree() {
             {s === 'personal' ? '个人知识库' : '团队知识库'}
           </button>
         ))}
-        {scope === 'team' && (
-          <select className="form-input ml-2 w-52 py-1.5" value={teamId ?? ''} onChange={(e) => { setTeamId(e.target.value || undefined); setSearch(''); resetTree(); }}>
-            <option value="">选择团队</option>
+      </div>
+
+      {/* 团队选择：置于 Tab 下方，仅在团队 Tab 显示 */}
+      {scope === 'team' && (
+        <div className="mb-5 flex items-center gap-2">
+          <Users size={15} className="shrink-0 text-muted" />
+          <span className="shrink-0 whitespace-nowrap text-12px text-muted">团队</span>
+          <select className="form-input min-w-0 flex-1 py-1.5 sm:w-44" value={teamId ?? ''} onChange={(e) => { setTeamId(e.target.value || undefined); setSearch(''); resetTree(); }}>
             {(teams.data ?? []).map((t) => (
               <option key={t.id} value={t.id}>{t.name}</option>
             ))}
           </select>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* 搜索框 */}
       <div className="relative mb-5">
@@ -342,7 +356,7 @@ export function WikiTree() {
       {/* 新建页面弹窗 */}
       {newModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" onClick={() => setNewModal(false)}>
-          <div className="card w-full max-w-460 rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="card w-full max-w-[460px] rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-4 font-display text-16px font-650 text-ink">
               新建{newParent ? `「${newParent.title}」的子页面` : '根页面'}
             </h3>
@@ -367,7 +381,7 @@ export function WikiTree() {
       {/* 重命名弹窗 */}
       {(renaming !== null) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" onClick={() => setRenaming(null)}>
-          <div className="card w-full max-w-460 rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="card w-full max-w-[460px] rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-4 font-display text-16px font-650 text-ink">重命名</h3>
             <div className="form-group">
               <label>页面标题</label>
@@ -387,7 +401,7 @@ export function WikiTree() {
       {/* 移动弹窗 */}
       {(moving !== null) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" onClick={() => setMoving(null)}>
-          <div className="card flex max-h-[70vh] w-full max-w-460 flex-col rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
+          <div className="card flex max-h-[70vh] w-full max-w-[460px] flex-col rounded-2xl p-6" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-1 font-display text-16px font-650 text-ink">移动「{moving.title}」</h3>
             <p className="mb-4 text-12px text-muted">选择目标父页面</p>
             <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">

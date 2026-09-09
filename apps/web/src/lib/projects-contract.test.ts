@@ -73,6 +73,8 @@ describe('项目中心契约 - 时间/负责人/协作人新增字段', () => {
       priority: 'high',
       owner_id: 'u1',
       owner_name: '张三',
+      milestone_id: 'm1',
+      milestone_name: 'MVP 上线',
       plan_start_at: '2026-09-01T00:00:00.000Z',
       plan_end_at: null,
       actual_start_at: null,
@@ -117,6 +119,9 @@ describe('项目中心契约 - 时间/负责人/协作人新增字段', () => {
     const t = Task.parse({
       id: 't1',
       requirement_id: 'r1',
+      requirement_title: '需求一',
+      milestone_id: 'm1',
+      milestone_name: 'MVP 上线',
       title: '任务',
       description: '',
       status: 'todo',

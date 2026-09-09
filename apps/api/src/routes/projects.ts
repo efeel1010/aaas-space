@@ -24,6 +24,7 @@ import {
   CreateTaskRequest,
   UpdateTaskRequest,
   CreateMilestoneRequest,
+  UpdateMilestoneRequest,
   CreateProjectCommentRequest,
 } from '@pulse-space/contracts';
 import type { Collaborator } from '@pulse-space/contracts';
@@ -87,6 +88,44 @@ async function userNamesByIds(ids: string[]): Promise<Map<string, string>> {
   if (!ids.length) return new Map();
   const rows = await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, ids));
   return new Map(rows.map((r) => [r.id, r.name]));
+}
+
+// 里程碑名称映射
+async function milestoneNamesByIds(ids: string[]): Promise<Map<string, string>> {
+  if (!ids.length) return new Map();
+  const rows = await db.select({ id: milestones.id, title: milestones.title }).from(milestones).where(inArray(milestones.id, ids));
+  return new Map(rows.map((r) => [r.id, r.title]));
+}
+
+// 需求标题映射
+async function requirementTitlesByIds(ids: string[]): Promise<Map<string, string>> {
+  if (!ids.length) return new Map();
+  const rows = await db.select({ id: requirements.id, title: requirements.title }).from(requirements).where(inArray(requirements.id, ids));
+  return new Map(rows.map((r) => [r.id, r.title]));
+}
+
+// 里程碑关联统计：以 requirements.milestone_id / tasks.milestone_id 聚合关联需求数 / 任务数
+async function milestoneCounts(ids: string[]): Promise<Map<string, { requirement_count: number; task_count: number }>> {
+  const m = new Map<string, { requirement_count: number; task_count: number }>();
+  if (!ids.length) return m;
+  for (const id of ids) {
+    m.set(id, { requirement_count: 0, task_count: 0 });
+  }
+  const reqRows = await db
+    .select({ milestone_id: requirements.milestone_id })
+    .from(requirements)
+    .where(and(inArray(requirements.milestone_id, ids), sql`${requirements.milestone_id} is not null`));
+  for (const r of reqRows) {
+    m.get(r.milestone_id!)!.requirement_count += 1;
+  }
+  const taskRows = await db
+    .select({ milestone_id: tasks.milestone_id })
+    .from(tasks)
+    .where(and(inArray(tasks.milestone_id, ids), sql`${tasks.milestone_id} is not null`));
+  for (const t of taskRows) {
+    m.get(t.milestone_id!)!.task_count += 1;
+  }
+  return m;
 }
 
 // 校验协作人 id 均为系统用户（去重；invalid 返 false，避免写入废 id）
@@ -198,6 +237,7 @@ function requirementDto(
   ownerName: string | null,
   collaborators: Collaborator[],
   counts: { task_count: number; done_task_count: number },
+  milestoneName: string | null,
 ) {
   return {
     id: r.id,
@@ -208,6 +248,8 @@ function requirementDto(
     priority: r.priority,
     owner_id: r.owner_id,
     owner_name: ownerName,
+    milestone_id: r.milestone_id,
+    milestone_name: milestoneName,
     plan_start_at: toIso(r.plan_start_at),
     plan_end_at: toIso(r.plan_end_at),
     actual_start_at: toIso(r.actual_start_at),
@@ -224,10 +266,15 @@ function taskDto(
   t: typeof tasks.$inferSelect,
   assigneeName: string | null,
   collaborators: Collaborator[],
+  milestoneName: string | null,
+  requirementTitle: string | null,
 ) {
   return {
     id: t.id,
     requirement_id: t.requirement_id,
+    requirement_title: requirementTitle,
+    milestone_id: t.milestone_id,
+    milestone_name: milestoneName,
     title: t.title,
     description: t.description,
     status: t.status,
@@ -607,9 +654,17 @@ projectsRouter.get('/:id/requirements', async (c) => {
   const ownerNames = await userNamesByIds(ownerIds);
   const collabMap = await requirementCollaboratorMap(ids);
   const countsMap = await requirementTaskCounts(ids);
+  const milestoneIds = rows.map((r) => r.milestone_id).filter((x): x is string => Boolean(x));
+  const milestoneNames = await milestoneNamesByIds(milestoneIds);
   const list = rows.map((r) => {
     const counts = countsMap.get(r.id) ?? { task_count: 0, done_task_count: 0 };
-    return requirementDto(r, r.owner_id ? ownerNames.get(r.owner_id) ?? null : null, collabMap.get(r.id) ?? [], counts);
+    return requirementDto(
+      r,
+      r.owner_id ? ownerNames.get(r.owner_id) ?? null : null,
+      collabMap.get(r.id) ?? [],
+      counts,
+      r.milestone_id ? milestoneNames.get(r.milestone_id) ?? null : null,
+    );
   });
   return c.json({ code: 0, message: 'ok', data: list, timestamp: new Date().toISOString() });
 });
@@ -637,6 +692,7 @@ projectsRouter.post('/:id/requirements', zValidator('json', CreateRequirementReq
         description: body.description,
         priority: body.priority,
         owner_id: body.owner_id ?? null,
+        milestone_id: body.milestone_id ?? null,
         plan_start_at: body.plan_start_at ? new Date(body.plan_start_at) : null,
         plan_end_at: body.plan_end_at ? new Date(body.plan_end_at) : null,
         actual_start_at: body.actual_start_at ? new Date(body.actual_start_at) : null,
@@ -653,10 +709,11 @@ projectsRouter.post('/:id/requirements', zValidator('json', CreateRequirementReq
 
   const ownerName = r.owner_id ? (await userNamesByIds([r.owner_id])).get(r.owner_id) ?? null : null;
   const collabs = (await requirementCollaboratorMap([r.id])).get(r.id) ?? [];
+  const milestoneName = r.milestone_id ? (await milestoneNamesByIds([r.milestone_id])).get(r.milestone_id) ?? null : null;
   return c.json({
     code: 0,
     message: '已创建需求',
-    data: requirementDto(r, ownerName, collabs, { task_count: 0, done_task_count: 0 }),
+    data: requirementDto(r, ownerName, collabs, { task_count: 0, done_task_count: 0 }, milestoneName),
     timestamp: new Date().toISOString(),
   });
 });
@@ -685,6 +742,7 @@ projectsRouter.patch('/requirements/:id', zValidator('json', UpdateRequirementRe
     if (body.status !== undefined) patch.status = body.status;
     if (body.priority !== undefined) patch.priority = body.priority;
     if (body.owner_id !== undefined) patch.owner_id = body.owner_id ?? null;
+    if (body.milestone_id !== undefined) patch.milestone_id = body.milestone_id ?? null;
     if (body.plan_start_at !== undefined) patch.plan_start_at = body.plan_start_at ? new Date(body.plan_start_at) : null;
     if (body.plan_end_at !== undefined) patch.plan_end_at = body.plan_end_at ? new Date(body.plan_end_at) : null;
     if (body.actual_start_at !== undefined) patch.actual_start_at = body.actual_start_at ? new Date(body.actual_start_at) : null;
@@ -702,10 +760,11 @@ projectsRouter.patch('/requirements/:id', zValidator('json', UpdateRequirementRe
   const ownerName = updated.owner_id ? (await userNamesByIds([updated.owner_id])).get(updated.owner_id) ?? null : null;
   const collabs = (await requirementCollaboratorMap([updated.id])).get(updated.id) ?? [];
   const counts = (await requirementTaskCounts([updated.id])).get(updated.id) ?? { task_count: 0, done_task_count: 0 };
+  const milestoneName = updated.milestone_id ? (await milestoneNamesByIds([updated.milestone_id])).get(updated.milestone_id) ?? null : null;
   return c.json({
     code: 0,
     message: '已更新',
-    data: requirementDto(updated, ownerName, collabs, counts),
+    data: requirementDto(updated, ownerName, collabs, counts, milestoneName),
     timestamp: new Date().toISOString(),
   });
 });
@@ -736,10 +795,21 @@ projectsRouter.get('/requirements/:id/tasks', async (c) => {
     .orderBy(desc(tasks.created_at));
   const ids = rows.map((row) => row.task.id);
   const collabMap = await taskCollaboratorMap(ids);
+  const milestoneIds = rows.map((row) => row.task.milestone_id).filter((x): x is string => Boolean(x));
+  const milestoneNames = await milestoneNamesByIds(milestoneIds);
+  const requirementTitle = r.title;
   return c.json({
     code: 0,
     message: 'ok',
-    data: rows.map((row) => taskDto(row.task, row.assignee_name, collabMap.get(row.task.id) ?? [])),
+    data: rows.map((row) =>
+      taskDto(
+        row.task,
+        row.assignee_name,
+        collabMap.get(row.task.id) ?? [],
+        row.task.milestone_id ? milestoneNames.get(row.task.milestone_id) ?? null : null,
+        requirementTitle,
+      ),
+    ),
     timestamp: new Date().toISOString(),
   });
 });
@@ -769,6 +839,7 @@ projectsRouter.post('/requirements/:id/tasks', zValidator('json', CreateTaskRequ
         description: body.description,
         priority: body.priority,
         assignee_id: body.assignee_id ?? null,
+        milestone_id: body.milestone_id ?? null,
         due_date: body.due_date ? new Date(body.due_date) : null,
         plan_start_at: body.plan_start_at ? new Date(body.plan_start_at) : null,
         plan_end_at: body.plan_end_at ? new Date(body.plan_end_at) : null,
@@ -784,6 +855,7 @@ projectsRouter.post('/requirements/:id/tasks', zValidator('json', CreateTaskRequ
 
   const assigneeName = t.assignee_id ? (await userNamesByIds([t.assignee_id])).get(t.assignee_id) ?? null : null;
   const collabs = (await taskCollaboratorMap([t.id])).get(t.id) ?? [];
+  const milestoneName = t.milestone_id ? (await milestoneNamesByIds([t.milestone_id])).get(t.milestone_id) ?? null : null;
 
   // 通知：任务分配给负责人
   await notify(t.assignee_id, user.id, {
@@ -792,7 +864,7 @@ projectsRouter.post('/requirements/:id/tasks', zValidator('json', CreateTaskRequ
     link: `/projects/${r.project_id}`,
   });
 
-  return c.json({ code: 0, message: '已创建任务', data: taskDto(t, assigneeName, collabs), timestamp: new Date().toISOString() });
+  return c.json({ code: 0, message: '已创建任务', data: taskDto(t, assigneeName, collabs, milestoneName, r.title), timestamp: new Date().toISOString() });
 });
 
 projectsRouter.patch('/tasks/:id', zValidator('json', UpdateTaskRequest), async (c) => {
@@ -821,6 +893,7 @@ projectsRouter.patch('/tasks/:id', zValidator('json', UpdateTaskRequest), async 
     if (body.priority !== undefined) patch.priority = body.priority;
     if (body.due_date !== undefined) patch.due_date = body.due_date ? new Date(body.due_date) : null;
     if (body.assignee_id !== undefined) patch.assignee_id = body.assignee_id ?? null;
+    if (body.milestone_id !== undefined) patch.milestone_id = body.milestone_id ?? null;
     if (body.plan_start_at !== undefined) patch.plan_start_at = body.plan_start_at ? new Date(body.plan_start_at) : null;
     if (body.plan_end_at !== undefined) patch.plan_end_at = body.plan_end_at ? new Date(body.plan_end_at) : null;
     if (body.actual_start_at !== undefined) patch.actual_start_at = body.actual_start_at ? new Date(body.actual_start_at) : null;
@@ -837,6 +910,7 @@ projectsRouter.patch('/tasks/:id', zValidator('json', UpdateTaskRequest), async 
 
   const assigneeName = updated.assignee_id ? (await userNamesByIds([updated.assignee_id])).get(updated.assignee_id) ?? null : null;
   const collabs = (await taskCollaboratorMap([updated.id])).get(updated.id) ?? [];
+  const milestoneName = updated.milestone_id ? (await milestoneNamesByIds([updated.milestone_id])).get(updated.milestone_id) ?? null : null;
 
   // 通知：负责人变更时通知新负责人
   if (updated.assignee_id && updated.assignee_id !== t.assignee_id) {
@@ -850,7 +924,7 @@ projectsRouter.patch('/tasks/:id', zValidator('json', UpdateTaskRequest), async 
   return c.json({
     code: 0,
     message: '已更新',
-    data: taskDto(updated, assigneeName, collabs),
+    data: taskDto(updated, assigneeName, collabs, milestoneName, r.title),
     timestamp: new Date().toISOString(),
   });
 });
@@ -866,6 +940,39 @@ projectsRouter.delete('/tasks/:id', async (c) => {
   return c.json({ code: 0, message: '已删除', timestamp: new Date().toISOString() });
 });
 
+// ===== 项目级任务列表（任务 Tab：返回该项目全部任务，带需求与里程碑信息） =====
+// 路径 /projects/:id/tasks：与 /projects/:id 不同段数不冲突；注册在任务区即可
+projectsRouter.get('/:id/tasks', async (c) => {
+  const user = c.get('user');
+  const { p, err } = await getProjectOr403(user, c.req.param('id'));
+  if (err) return c.json({ code: err, message: err === 404 ? '项目不存在' : '无权访问', timestamp: new Date().toISOString() }, err);
+  const rows = await db
+    .select({ task: tasks, assignee_name: users.name, requirement_title: requirements.title })
+    .from(tasks)
+    .innerJoin(requirements, eq(requirements.id, tasks.requirement_id))
+    .leftJoin(users, eq(tasks.assignee_id, users.id))
+    .where(eq(requirements.project_id, p!.id))
+    .orderBy(desc(tasks.created_at));
+  const ids = rows.map((row) => row.task.id);
+  const collabMap = await taskCollaboratorMap(ids);
+  const milestoneIds = rows.map((row) => row.task.milestone_id).filter((x): x is string => Boolean(x));
+  const milestoneNames = await milestoneNamesByIds(milestoneIds);
+  return c.json({
+    code: 0,
+    message: 'ok',
+    data: rows.map((row) =>
+      taskDto(
+        row.task,
+        row.assignee_name,
+        collabMap.get(row.task.id) ?? [],
+        row.task.milestone_id ? milestoneNames.get(row.task.milestone_id) ?? null : null,
+        row.requirement_title,
+      ),
+    ),
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // ===== 里程碑 =====
 
 // 列表
@@ -874,18 +981,24 @@ projectsRouter.get('/:id/milestones', async (c) => {
   const { p, err } = await getProjectOr403(user, c.req.param('id'));
   if (err) return c.json({ code: err, message: err === 404 ? '项目不存在' : '无权访问', timestamp: new Date().toISOString() }, err);
   const rows = await db.select().from(milestones).where(eq(milestones.project_id, p!.id)).orderBy(milestones.created_at);
+  const countsMap = await milestoneCounts(rows.map((m) => m.id));
   return c.json({
     code: 0,
     message: 'ok',
-    data: rows.map((m) => ({
-      id: m.id,
-      project_id: m.project_id,
-      title: m.title,
-      description: m.description,
-      due_date: m.due_date?.toISOString() ?? null,
-      completed_at: m.completed_at?.toISOString() ?? null,
-      created_at: m.created_at.toISOString(),
-    })),
+    data: rows.map((m) => {
+      const counts = countsMap.get(m.id) ?? { requirement_count: 0, task_count: 0 };
+      return {
+        id: m.id,
+        project_id: m.project_id,
+        title: m.title,
+        description: m.description,
+        due_date: m.due_date?.toISOString() ?? null,
+        completed_at: m.completed_at?.toISOString() ?? null,
+        requirement_count: counts.requirement_count,
+        task_count: counts.task_count,
+        created_at: m.created_at.toISOString(),
+      };
+    }),
     timestamp: new Date().toISOString(),
   });
 });
@@ -906,6 +1019,42 @@ projectsRouter.post('/:id/milestones', zValidator('json', CreateMilestoneRequest
     })
     .returning();
   return c.json({ code: 0, message: '已创建', data: { id: m.id }, timestamp: new Date().toISOString() });
+});
+
+// 更新（编辑 title / description / due_date）
+projectsRouter.patch('/milestones/:mid', zValidator('json', UpdateMilestoneRequest), async (c) => {
+  const user = c.get('user');
+  const [m] = await db.select().from(milestones).where(eq(milestones.id, c.req.param('mid'))).limit(1);
+  if (!m) return c.json({ code: 404, message: '里程碑不存在', timestamp: new Date().toISOString() }, 404);
+  const { p, err } = await getProjectOr403(user, m.project_id);
+  if (err) return c.json({ code: err, message: err === 404 ? '项目不存在' : '无权访问', timestamp: new Date().toISOString() }, err);
+  const body = c.req.valid('json');
+  const patch: Record<string, unknown> = {};
+  if (body.title !== undefined) patch.title = body.title;
+  if (body.description !== undefined) patch.description = body.description;
+  if (body.due_date !== undefined) patch.due_date = body.due_date ? new Date(body.due_date) : null;
+  const [updated] = await db
+    .update(milestones)
+    .set(patch)
+    .where(eq(milestones.id, m.id))
+    .returning();
+  const counts = (await milestoneCounts([updated.id])).get(updated.id) ?? { requirement_count: 0, task_count: 0 };
+  return c.json({
+    code: 0,
+    message: '已更新',
+    data: {
+      id: updated.id,
+      project_id: updated.project_id,
+      title: updated.title,
+      description: updated.description,
+      due_date: updated.due_date?.toISOString() ?? null,
+      completed_at: updated.completed_at?.toISOString() ?? null,
+      requirement_count: counts.requirement_count,
+      task_count: counts.task_count,
+      created_at: updated.created_at.toISOString(),
+    },
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // 标记完成 / 取消完成

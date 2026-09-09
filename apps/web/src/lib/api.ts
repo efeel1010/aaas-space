@@ -25,6 +25,8 @@ import type {
   TrashDocItem,
   TrashProjectItem,
   DocTemplate,
+  DocumentAccessItem,
+  DocAccessPermission,
 } from '@pulse-space/contracts';
 
 const BASE = '/api';
@@ -125,9 +127,9 @@ export const docApi = {
     if (params.teamId) qs.set('teamId', params.teamId);
     return request<WikiTocItem[]>(`/documents/wiki-toc?${qs}`);
   },
-  create: (body: { scope: 'personal' | 'team'; team_id?: string; kind: DocKind; parent_id?: string; is_folder?: boolean; title?: string; content?: string; icon?: string }) =>
+  create: (body: { scope: 'personal' | 'team'; team_id?: string; kind: DocKind; parent_id?: string; is_folder?: boolean; title?: string; content?: string; icon?: string; visibility?: string; base_permission?: string }) =>
     request<Document>('/documents', { method: 'POST', body: JSON.stringify(body) }),
-  update: (id: string, patch: { title?: string; content?: string; parent_id?: string | null; icon?: string | null; cover?: string | null }) =>
+  update: (id: string, patch: { title?: string; content?: string; parent_id?: string | null; icon?: string | null; cover?: string | null; visibility?: string; base_permission?: string }) =>
     request<Document>(`/documents/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   remove: (id: string) => request<null>(`/documents/${id}`, { method: 'DELETE' }),
   // 版本历史
@@ -144,6 +146,12 @@ export const docApi = {
     request<null>(`/documents/${id}/comments/${commentId}`, { method: 'DELETE' }),
   toggleResolveComment: (id: string, commentId: string) =>
     request<null>(`/documents/${id}/comments/${commentId}/resolve`, { method: 'POST' }),
+  // 逐成员授权
+  access: (id: string) => request<DocumentAccessItem[]>(`/documents/${id}/access`),
+  grantAccess: (id: string, userId: string, permission: DocAccessPermission) =>
+    request<null>(`/documents/${id}/access`, { method: 'PUT', body: JSON.stringify({ user_id: userId, permission }) }),
+  revokeAccess: (id: string, userId: string) =>
+    request<null>(`/documents/${id}/access/${userId}`, { method: 'DELETE' }),
 };
 
 // ===== 项目 =====
@@ -163,20 +171,24 @@ export const projectApi = {
     request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   remove: (id: string) => request<null>(`/projects/${id}`, { method: 'DELETE' }),
   requirements: (id: string) => request<Requirement[]>(`/projects/${id}/requirements`),
-  createRequirement: (id: string, body: { title: string; description?: string; priority?: string; owner_id?: string | null; plan_start_at?: NullableTime; plan_end_at?: NullableTime; actual_start_at?: NullableTime; actual_end_at?: NullableTime; collaborator_ids?: string[] }) =>
+  createRequirement: (id: string, body: { title: string; description?: string; priority?: string; owner_id?: string | null; milestone_id?: string | null; plan_start_at?: NullableTime; plan_end_at?: NullableTime; actual_start_at?: NullableTime; actual_end_at?: NullableTime; collaborator_ids?: string[] }) =>
     request<Requirement>(`/projects/${id}/requirements`, { method: 'POST', body: JSON.stringify(body) }),
-  updateRequirement: (id: string, patch: { title?: string; description?: string; status?: string; priority?: string; owner_id?: string | null; plan_start_at?: NullableTime; plan_end_at?: NullableTime; actual_start_at?: NullableTime; actual_end_at?: NullableTime; collaborator_ids?: string[] }) =>
+  updateRequirement: (id: string, patch: { title?: string; description?: string; status?: string; priority?: string; owner_id?: string | null; milestone_id?: string | null; plan_start_at?: NullableTime; plan_end_at?: NullableTime; actual_start_at?: NullableTime; actual_end_at?: NullableTime; collaborator_ids?: string[] }) =>
     request<Requirement>(`/projects/requirements/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   removeRequirement: (id: string) => request<null>(`/projects/requirements/${id}`, { method: 'DELETE' }),
   tasks: (requirementId: string) => request<Task[]>(`/projects/requirements/${requirementId}/tasks`),
-  createTask: (requirementId: string, body: { title: string; description?: string; priority?: string; assignee_id?: string; due_date?: string; plan_start_at?: NullableTime; plan_end_at?: NullableTime; actual_start_at?: NullableTime; actual_end_at?: NullableTime; collaborator_ids?: string[] }) =>
+  createTask: (requirementId: string, body: { title: string; description?: string; priority?: string; assignee_id?: string; milestone_id?: string | null; due_date?: string; plan_start_at?: NullableTime; plan_end_at?: NullableTime; actual_start_at?: NullableTime; actual_end_at?: NullableTime; collaborator_ids?: string[] }) =>
     request<Task>(`/projects/requirements/${requirementId}/tasks`, { method: 'POST', body: JSON.stringify(body) }),
-  updateTask: (id: string, patch: { title?: string; description?: string; status?: string; priority?: string; assignee_id?: string | null; due_date?: string | null; plan_start_at?: NullableTime; plan_end_at?: NullableTime; actual_start_at?: NullableTime; actual_end_at?: NullableTime; collaborator_ids?: string[] }) =>
+  updateTask: (id: string, patch: { title?: string; description?: string; status?: string; priority?: string; assignee_id?: string | null; milestone_id?: string | null; due_date?: string | null; plan_start_at?: NullableTime; plan_end_at?: NullableTime; actual_start_at?: NullableTime; actual_end_at?: NullableTime; collaborator_ids?: string[] }) =>
     request<Task>(`/projects/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   removeTask: (id: string) => request<null>(`/projects/tasks/${id}`, { method: 'DELETE' }),
+  // 项目级任务列表（含 requirement_title / milestone_name）
+  projectTasks: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`),
   milestones: (projectId: string) => request<Milestone[]>(`/projects/${projectId}/milestones`),
   createMilestone: (projectId: string, body: { title: string; description?: string; due_date?: string | null }) =>
     request<{ id: string }>(`/projects/${projectId}/milestones`, { method: 'POST', body: JSON.stringify(body) }),
+  updateMilestone: (id: string, patch: { title?: string; description?: string; due_date?: string | null }) =>
+    request<Milestone>(`/projects/milestones/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   toggleMilestone: (id: string) => request<null>(`/projects/milestones/${id}/toggle`, { method: 'POST' }),
   removeMilestone: (id: string) => request<null>(`/projects/milestones/${id}`, { method: 'DELETE' }),
   comments: (targetType: CommentTargetType, targetId: string) =>

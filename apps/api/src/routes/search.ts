@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
-import { eq, and, or, desc, inArray, ilike, isNull } from 'drizzle-orm';
+import { eq, and, or, desc, inArray, ilike, isNull, type SQL } from 'drizzle-orm';
 import { db } from '../db/connection';
-import { documents, projects, teamMembers } from '../db/schema';
+import { documents, projects, teamMembers, documentAccess } from '../db/schema';
 import { requireAuth } from '../middleware/session';
+import { filterAccessible } from '../lib/docAccess';
 import type { AppVariables } from '../types';
 
 export const searchRouter = new Hono<{ Variables: AppVariables }>();
@@ -28,9 +29,15 @@ searchRouter.get('/', async (c) => {
 
   const myTeams = await db.select({ team_id: teamMembers.team_id }).from(teamMembers).where(eq(teamMembers.user_id, user.id));
   const teamIds = myTeams.map((t) => t.team_id);
-  const docAccess = teamIds.length
-    ? or(eq(documents.owner_id, user.id), inArray(documents.team_id, teamIds))
-    : eq(documents.owner_id, user.id);
+  // 文档可见候选：自己创建 / 所在团队 / 被明文授权（document_access）
+  const aclSub = db.select({ doc_id: documentAccess.doc_id }).from(documentAccess).where(eq(documentAccess.user_id, user.id));
+  const condsArr: SQL[] = [];
+  if (teamIds.length) {
+    condsArr.push(eq(documents.owner_id, user.id), inArray(documents.team_id, teamIds), inArray(documents.id, aclSub));
+  } else {
+    condsArr.push(eq(documents.owner_id, user.id), inArray(documents.id, aclSub));
+  }
+  const docAccess = or(...condsArr);
   const projAccess = teamIds.length
     ? or(eq(projects.owner_id, user.id), inArray(projects.team_id, teamIds))
     : eq(projects.owner_id, user.id);
@@ -57,11 +64,14 @@ searchRouter.get('/', async (c) => {
       .limit(5),
   ]);
 
+  // 精确解析生效权限，剔除 none（如 private 团队文档对普通成员不可见）
+  const accessible = await filterAccessible(user.id, docRows);
+
   return c.json({
     code: 0,
     message: 'ok',
     data: {
-      documents: docRows.map((d) => ({
+      documents: accessible.map(({ doc: d }) => ({
         id: d.id,
         team_id: d.team_id,
         owner_id: d.owner_id,
